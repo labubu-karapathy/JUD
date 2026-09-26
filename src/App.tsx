@@ -6,6 +6,7 @@ import { ChatRoom } from './pages/ChatRoom'
 import { ProfileView } from './pages/ProfileView'
 import { BottomNav, type NavTab } from './components/BottomNav'
 import { SecurityLock } from './components/SecurityLock'
+import { InstallPwaBanner } from './components/InstallPwaBanner'
 import { api, type Profile, type MatchRecord } from './services/supabase'
 import { db } from './db'
 
@@ -148,6 +149,9 @@ export const App: React.FC = () => {
             />
           </div>
         )}
+
+        {/* iOS Safari PWA Installation Prompt */}
+        <InstallPwaBanner />
       </div>
     </SecurityLock>
   )
