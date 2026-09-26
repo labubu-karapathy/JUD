@@ -146,7 +146,7 @@ export const Auth: React.FC<AuthProps> = ({ onAuthSuccess }) => {
     }
 
     if (age < 18) {
-      alert('You must be 18 years or older to join JUD')
+      alert('You must be 18 years or older to join Jadavpur Love Birds')
       return
     }
 
@@ -245,8 +245,8 @@ export const Auth: React.FC<AuthProps> = ({ onAuthSuccess }) => {
       <div className="space-y-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center space-x-2">
-            <span className="text-2xl font-black tracking-tight text-white">JUD</span>
-            <span className="text-xs bg-rose-500/20 text-rose-400 font-bold px-2 py-0.5 rounded-full border border-rose-500/30">
+            <span className="text-xl font-black tracking-tight text-white">Jadavpur Love Birds</span>
+            <span className="text-[10px] bg-rose-500/20 text-rose-400 font-bold px-2 py-0.5 rounded-full border border-rose-500/30">
               CAMPUS P2P
             </span>
           </div>
@@ -270,7 +270,7 @@ export const Auth: React.FC<AuthProps> = ({ onAuthSuccess }) => {
             </div>
             <h2 className="text-xl font-bold text-white">Scan University Library Card</h2>
             <p className="text-xs text-slate-400 max-w-xs mx-auto">
-              JUD is exclusively for verified students. We scan your physical library card and hash it with SHA-256 for privacy.
+              Jadavpur Love Birds is exclusively for verified students. We scan your physical library card and hash it with SHA-256 for privacy.
             </p>
           </div>
 

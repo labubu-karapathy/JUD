@@ -168,7 +168,7 @@ export const Discover: React.FC<DiscoverProps> = ({
             </div>
             <h3 className="text-xl font-black text-white">It's a Match!</h3>
             <p className="text-xs text-slate-300 max-w-xs">
-              You and <span className="font-bold text-rose-400">{matchCelebration.full_name}</span> are now matched on JUD.
+              You and <span className="font-bold text-rose-400">{matchCelebration.full_name}</span> are now matched on Jadavpur Love Birds.
             </p>
             {currentProfile.gender === 'female' ? (
               <p className="text-[11px] text-emerald-400 bg-emerald-950/60 px-3 py-1.5 rounded-full border border-emerald-800">

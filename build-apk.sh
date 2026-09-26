@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -e
 
-echo "============================================="
-echo "  DatingApp - Android APK Automated Builder   "
-echo "============================================="
+echo "=========================================================="
+echo "  Jadavpur Love Birds - Android APK Automated Builder     "
+echo "=========================================================="
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$PROJECT_ROOT"
@@ -37,17 +37,18 @@ cd android
 ./gradlew assembleDebug
 cd "$PROJECT_ROOT"
 
-# 6. Copy output APK to root as DatingApp.apk for WhatsApp sharing
+# 6. Copy output APK to root as JadavpurLoveBirds.apk for WhatsApp sharing
 APK_SOURCE="android/app/build/outputs/apk/debug/app-debug.apk"
-APK_TARGET="$PROJECT_ROOT/DatingApp.apk"
+APK_TARGET="$PROJECT_ROOT/JadavpurLoveBirds.apk"
 
 if [ -f "$APK_SOURCE" ]; then
   cp "$APK_SOURCE" "$APK_TARGET"
+  cp "$APK_SOURCE" "$PROJECT_ROOT/DatingApp.apk" # Legacy alias
   echo ""
-  echo "======================================================================"
-  echo "SUCCESS: DatingApp.apk is ready in the root folder to send over WhatsApp!"
+  echo "================================================================================"
+  echo "SUCCESS: JadavpurLoveBirds.apk is ready in the root folder to send over WhatsApp!"
   echo "Location: $APK_TARGET"
-  echo "======================================================================"
+  echo "================================================================================"
 else
   echo "[!] Error: APK compilation finished but $APK_SOURCE was not found."
   exit 1

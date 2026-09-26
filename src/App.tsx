@@ -84,10 +84,13 @@ export const App: React.FC = () => {
   if (isLoadingAuth) {
     return (
       <div className="max-w-md mx-auto min-h-screen bg-slate-950 text-white flex flex-col items-center justify-center space-y-4">
-        <div className="w-12 h-12 rounded-2xl bg-rose-500/20 border border-rose-500 flex items-center justify-center animate-pulse">
-          <span className="text-xl font-black text-rose-500">JUD</span>
+        <div className="w-14 h-14 rounded-2xl bg-rose-500/20 border border-rose-500 flex items-center justify-center animate-pulse">
+          <span className="text-xl font-black text-rose-500">JLB</span>
         </div>
-        <p className="text-xs text-slate-400 font-medium">Securing P2P Campus Network...</p>
+        <div className="text-center">
+          <h2 className="text-sm font-bold text-white">Jadavpur Love Birds</h2>
+          <p className="text-[11px] text-slate-400 font-medium">Securing P2P Campus Network...</p>
+        </div>
       </div>
     )
   }

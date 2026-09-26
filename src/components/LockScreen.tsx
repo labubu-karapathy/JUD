@@ -110,7 +110,7 @@ export const LockScreen: React.FC<LockScreenProps> = ({
           <Lock className="w-8 h-8 animate-pulse" />
         </div>
         <div className="text-center">
-          <h2 className="text-2xl font-bold tracking-tight">JUD App Locked</h2>
+          <h2 className="text-2xl font-bold tracking-tight">Jadavpur Love Birds Locked</h2>
           <p className="text-sm text-slate-400 mt-1">
             Welcome back, <span className="text-rose-400 font-medium">{userFullName}</span>
           </p>

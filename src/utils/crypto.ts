@@ -73,7 +73,7 @@ export async function registerBiometrics(userId: string, userName: string): Prom
       publicKey: {
         challenge,
         rp: {
-          name: 'JUD Dating App',
+          name: 'Jadavpur Love Birds',
           id: window.location.hostname,
         },
         user: {

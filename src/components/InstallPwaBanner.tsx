@@ -44,7 +44,7 @@ export const InstallPwaBanner: React.FC = () => {
             <Smartphone className="w-5 h-5" />
           </div>
           <div>
-            <h4 className="font-bold text-xs text-white">Install DatingApp on iOS</h4>
+            <h4 className="font-bold text-xs text-white">Install Jadavpur Love Birds on iOS</h4>
             <p className="text-[10px] text-slate-400">Get the full native mobile experience</p>
           </div>
         </div>

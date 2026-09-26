@@ -11,9 +11,9 @@ export default defineConfig({
       registerType: 'autoUpdate',
       includeAssets: ['favicon.svg', 'apple-touch-icon.png', 'pwa-192x192.png', 'pwa-512x512.png'],
       manifest: {
-        name: 'DatingApp',
-        short_name: 'Dating',
-        description: 'Verified Campus P2P Dating App with Zero Cloud Message Storage',
+        name: 'Jadavpur Love Birds',
+        short_name: 'Love Birds',
+        description: 'Jadavpur Love Birds - Verified Campus P2P Dating App with Zero Cloud Message Storage',
         theme_color: '#020617',
         background_color: '#020617',
         display: 'standalone',

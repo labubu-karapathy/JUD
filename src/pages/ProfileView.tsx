@@ -236,7 +236,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
         className="w-full py-3 bg-rose-950/40 hover:bg-rose-950/70 border border-rose-900/60 text-rose-300 font-semibold text-xs rounded-2xl flex items-center justify-center space-x-2 transition-all mt-auto"
       >
         <LogOut className="w-4 h-4" />
-        <span>Log Out of JUD App</span>
+        <span>Log Out of Jadavpur Love Birds</span>
       </button>
     </div>
   )
