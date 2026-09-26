@@ -245,8 +245,9 @@ export const Auth: React.FC<AuthProps> = ({ onAuthSuccess }) => {
       <div className="space-y-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center space-x-2">
-            <span className="text-xl font-black tracking-tight text-white">Jadavpur Love Birds</span>
-            <span className="text-[10px] bg-rose-500/20 text-rose-400 font-bold px-2 py-0.5 rounded-full border border-rose-500/30">
+            <img src="/icon.png" alt="JLB" className="w-8 h-8 rounded-xl object-cover border border-slate-700/80 shadow-md" />
+            <span className="text-lg font-black tracking-tight text-white">Jadavpur Love Birds</span>
+            <span className="text-[9px] bg-rose-500/20 text-rose-400 font-bold px-1.5 py-0.5 rounded-full border border-rose-500/30">
               CAMPUS P2P
             </span>
           </div>

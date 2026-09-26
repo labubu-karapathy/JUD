@@ -40,9 +40,11 @@ export const InstallPwaBanner: React.FC = () => {
         </button>
 
         <div className="flex items-center space-x-2.5">
-          <div className="w-10 h-10 rounded-xl bg-rose-500/10 border border-rose-500/30 flex items-center justify-center text-rose-500 shrink-0">
-            <Smartphone className="w-5 h-5" />
-          </div>
+          <img
+            src="/icon.png"
+            alt="Jadavpur Love Birds"
+            className="w-10 h-10 rounded-xl object-cover shrink-0 border border-slate-700/80 shadow-md"
+          />
           <div>
             <h4 className="font-bold text-xs text-white">Install Jadavpur Love Birds on iOS</h4>
             <p className="text-[10px] text-slate-400">Get the full native mobile experience</p>

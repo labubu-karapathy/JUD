@@ -106,8 +106,15 @@ export const LockScreen: React.FC<LockScreenProps> = ({
     <div className="fixed inset-0 z-50 flex flex-col items-center justify-between bg-slate-950/98 backdrop-blur-xl px-6 py-10 text-white max-w-md mx-auto">
       {/* Top Header */}
       <div className="flex flex-col items-center mt-6 space-y-3">
-        <div className="w-16 h-16 rounded-full bg-rose-500/10 border border-rose-500/30 flex items-center justify-center text-rose-500 shadow-lg shadow-rose-500/10">
-          <Lock className="w-8 h-8 animate-pulse" />
+        <div className="relative">
+          <img
+            src="/icon.png"
+            alt="Jadavpur Love Birds"
+            className="w-18 h-18 rounded-3xl object-cover shadow-2xl shadow-indigo-500/30 border border-slate-800"
+          />
+          <div className="absolute -bottom-1 -right-1 w-7 h-7 rounded-full bg-slate-900 border-2 border-slate-950 flex items-center justify-center text-rose-500 shadow-md">
+            <Lock className="w-3.5 h-3.5" />
+          </div>
         </div>
         <div className="text-center">
           <h2 className="text-2xl font-bold tracking-tight">Jadavpur Love Birds Locked</h2>
