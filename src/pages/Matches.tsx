@@ -1,7 +1,16 @@
 import React, { useState, useEffect, useCallback } from 'react'
-import { MessageCircle, ShieldAlert, Sparkles, Clock, CheckCircle2, ChevronRight, Lock, AlertTriangle } from 'lucide-react'
+import {
+  MessageCircle,
+  Sparkles,
+  CheckCircle2,
+  ChevronRight,
+  Lock,
+  AlertTriangle,
+  UserX,
+} from 'lucide-react'
 import { api, type MatchRecord, type Profile } from '../services/supabase'
 import { db, type LocalMessage } from '../db'
+import { ProfileModal } from '../components/ProfileModal'
 
 interface MatchesProps {
   currentProfile: Profile
@@ -19,6 +28,7 @@ export const Matches: React.FC<MatchesProps> = ({
 }) => {
   const [matches, setMatches] = useState<MatchWithLastMessage[]>([])
   const [isLoading, setIsLoading] = useState<boolean>(true)
+  const [selectedPartner, setSelectedPartner] = useState<Profile | null>(null)
 
   const loadMatches = useCallback(async () => {
     setIsLoading(true)
@@ -89,7 +99,7 @@ export const Matches: React.FC<MatchesProps> = ({
           {isUserFemale ? (
             <span>You hold the key to begin conversations. Matches cannot message or connect until you make the first move.</span>
           ) : (
-            <span>Only female members can dispatch the initial WebRTC connection. Once she says hello, direct P2P opens!</span>
+            <span>Only female members can dispatch the initial message. Once she says hello, direct chat opens!</span>
           )}
         </div>
       </div>
@@ -118,6 +128,7 @@ export const Matches: React.FC<MatchesProps> = ({
             const partner = match.partner
             if (!partner) return null
 
+            const isDeactivated = partner.is_deactivated
             const isFemaleInitiated = match.has_female_initiated
             const canMaleChat = isUserFemale || isFemaleInitiated
             const avatarUrl = partner.photo_urls?.[0] || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=400&q=80'
@@ -126,17 +137,36 @@ export const Matches: React.FC<MatchesProps> = ({
               <div
                 key={match.id}
                 onClick={() => onSelectMatch(match)}
-                className="w-full bg-slate-900 hover:bg-slate-850 active:bg-slate-800/90 border border-slate-800 hover:border-slate-700 rounded-2xl p-3.5 flex items-center justify-between cursor-pointer transition-all shadow-sm"
+                className={`w-full border rounded-2xl p-3.5 flex items-center justify-between cursor-pointer transition-all shadow-sm ${
+                  isDeactivated
+                    ? 'bg-rose-950/20 border-rose-900/40 opacity-75'
+                    : 'bg-slate-900 hover:bg-slate-850 active:bg-slate-800/90 border-slate-800 hover:border-slate-700'
+                }`}
               >
                 <div className="flex items-center space-x-3 min-w-0">
-                  {/* Avatar */}
-                  <div className="relative shrink-0">
-                    <img
-                      src={avatarUrl}
-                      alt={partner.full_name}
-                      className="w-13 h-13 rounded-2xl object-cover border border-slate-700 bg-slate-800"
-                    />
-                    {match.unreadCount ? (
+                  {/* Avatar: WhatsApp style round avatar */}
+                  <div
+                    className="relative shrink-0 cursor-pointer"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      if (!isDeactivated && partner) {
+                        setSelectedPartner(partner)
+                      }
+                    }}
+                    title="Tap to view student details"
+                  >
+                    {isDeactivated ? (
+                      <div className="w-12 h-12 rounded-full bg-slate-950 border border-rose-900/60 flex items-center justify-center">
+                        <UserX className="w-6 h-6 text-rose-500" />
+                      </div>
+                    ) : (
+                      <img
+                        src={avatarUrl}
+                        alt={partner.full_name}
+                        className="w-12 h-12 rounded-full object-cover border border-slate-700 bg-slate-800 hover:opacity-90 active:scale-95 transition-all shadow-md"
+                      />
+                    )}
+                    {match.unreadCount && !isDeactivated ? (
                       <span className="absolute -top-1 -right-1 w-5 h-5 bg-rose-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center border-2 border-slate-900">
                         {match.unreadCount}
                       </span>
@@ -146,9 +176,11 @@ export const Matches: React.FC<MatchesProps> = ({
                   {/* Partner Details & Last Message */}
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center space-x-1.5">
-                      <h4 className="font-bold text-sm text-white truncate">{partner.full_name}</h4>
-                      <span className="text-xs text-slate-400">{partner.age}</span>
-                      {partner.report_count > 0 && (
+                      <h4 className="font-bold text-sm text-white truncate">
+                        {isDeactivated ? 'User Deactivated' : partner.full_name}
+                      </h4>
+                      {!isDeactivated && <span className="text-xs text-slate-400">{partner.age}</span>}
+                      {partner.report_count > 0 && !isDeactivated && (
                         <span className="shrink-0 flex items-center text-[10px] text-amber-400 font-mono bg-amber-950/70 px-1.5 py-0.2 rounded border border-amber-800/50">
                           <AlertTriangle className="w-2.5 h-2.5 mr-0.5" />
                           {partner.report_count}
@@ -156,13 +188,23 @@ export const Matches: React.FC<MatchesProps> = ({
                       )}
                     </div>
 
-                    <p className="text-[11px] text-rose-400 font-medium truncate">
-                      {partner.insta_handle}
-                    </p>
+                    {!isDeactivated ? (
+                      <p className="text-[11px] text-rose-400 font-medium truncate">
+                        {partner.insta_handle}
+                      </p>
+                    ) : (
+                      <p className="text-[11px] text-rose-400 font-medium truncate">
+                        De-authenticated by Admin
+                      </p>
+                    )}
 
                     {/* Initiation / Chat status */}
                     <div className="mt-1 flex items-center space-x-1 text-[11px]">
-                      {!canMaleChat ? (
+                      {isDeactivated ? (
+                        <span className="text-rose-400 text-[10px] font-semibold">
+                          🚫 Chat Disabled
+                        </span>
+                      ) : !canMaleChat ? (
                         <span className="inline-flex items-center space-x-1 text-amber-400 bg-amber-950/40 px-2 py-0.5 rounded-full border border-amber-800/30 font-medium">
                           <Lock className="w-3 h-3" />
                           <span>Waiting for her to initiate</span>
@@ -170,7 +212,11 @@ export const Matches: React.FC<MatchesProps> = ({
                       ) : match.lastMessage ? (
                         <span className="text-slate-400 truncate">
                           {match.lastMessage.senderId === currentProfile.id ? 'You: ' : ''}
-                          {match.lastMessage.text || '📷 Media attachment'}
+                          {match.lastMessage.isDeleted
+                            ? '🚫 This message was deleted'
+                            : match.lastMessage.isViewOnce
+                            ? '👁️ View-once photo'
+                            : match.lastMessage.text || '📷 Media attachment'}
                         </span>
                       ) : (
                         <span className="text-emerald-400 inline-flex items-center space-x-1 font-medium">
@@ -194,6 +240,13 @@ export const Matches: React.FC<MatchesProps> = ({
           })
         )}
       </div>
+
+      {/* Profile Detail Modal */}
+      <ProfileModal
+        isOpen={Boolean(selectedPartner)}
+        profile={selectedPartner}
+        onClose={() => setSelectedPartner(null)}
+      />
     </div>
   )
 }

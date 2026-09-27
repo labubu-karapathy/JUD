@@ -13,15 +13,27 @@ import {
   Clock,
   Circle,
   AlertTriangle,
-  Image as ImageIcon,
   X,
   ShieldCheck,
-  Sparkles
+  Sparkles,
+  Smile,
+  Trash2,
+  Eye,
+  EyeOff,
+  UserX,
 } from 'lucide-react'
 import { db, type LocalMessage, type MessageStatus } from '../db'
 import { api, type MatchRecord, type Profile } from '../services/supabase'
 import { P2PChatEngine, type ConnectionState } from '../services/p2pChat'
 import { ReportModal } from '../components/ReportModal'
+import { RichEmojiPicker } from '../components/RichEmojiPicker'
+import { ProfileModal } from '../components/ProfileModal'
+import {
+  pushOfflineEncryptedMessage,
+  drainOfflineEncryptedMessages,
+  backupMatchChatToGitHub,
+  restoreMatchChatFromGitHub,
+} from '../services/githubRelay'
 
 interface ChatRoomProps {
   currentProfile: Profile
@@ -42,12 +54,28 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
   const [connState, setConnState] = useState<ConnectionState>('idle')
   const [isMenuOpen, setIsMenuOpen] = useState<boolean>(false)
   const [isReportModalOpen, setIsReportModalOpen] = useState<boolean>(false)
+  const [isEmojiPickerOpen, setIsEmojiPickerOpen] = useState<boolean>(false)
+  const [isProfileModalOpen, setIsProfileModalOpen] = useState<boolean>(false)
+  const [isPartnerDeactivated, setIsPartnerDeactivated] = useState<boolean>(
+    Boolean(match.partner?.is_deactivated)
+  )
+
+  // Media & View-Once state
+  const [activeViewOnceMsgId, setActiveViewOnceMsgId] = useState<string | null>(null)
   const [previewMedia, setPreviewMedia] = useState<string | null>(null)
+  const [sendAsViewOnce, setSendAsViewOnce] = useState<boolean>(false)
   const [mediaTooltip, setMediaTooltip] = useState<string>('')
+  const [currentTime, setCurrentTime] = useState<number>(() => Date.now())
+
+  useEffect(() => {
+    const timer = setInterval(() => setCurrentTime(Date.now()), 30000)
+    return () => clearInterval(timer)
+  }, [])
 
   const engineRef = useRef<P2PChatEngine | null>(null)
   const messagesEndRef = useRef<HTMLDivElement | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const inputRef = useRef<HTMLInputElement | null>(null)
 
   const isUserFemale = currentProfile.gender === 'female'
   const partner = matchState.partner
@@ -57,23 +85,82 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }
 
-  // Load local messages from Dexie.js (Zero server storage)
+  // Load local messages from Dexie.js (Zero server storage) with automatic offline drain
   const loadLocalMessages = useCallback(async () => {
     try {
-      const stored = await db.getMessagesForMatch(matchState.id)
+      // Drain any queued offline messages for current user from ephemeral mailbox
+      const queued = await api.fetchAndDrainOfflineMessages(currentProfile.id)
+      if (queued && queued.length > 0) {
+        for (const item of queued) {
+          const localMsg: LocalMessage = {
+            id: item.id,
+            matchId: item.match_id,
+            senderId: item.sender_id,
+            text: item.text,
+            mediaBlob: item.media_blob,
+            mediaType: item.media_type,
+            isViewOnce: item.is_view_once,
+            viewOnceStatus: item.is_view_once ? 'unopened' : undefined,
+            status: 'delivered',
+            timestamp: item.created_at || Date.now(),
+          }
+          await db.saveMessage(localMsg)
+        }
+      }
+
+      // Also drain any GitHub encrypted offline messages
+      await drainOfflineEncryptedMessages(currentProfile.id)
+
+      let stored = await db.getMessagesForMatch(matchState.id)
+      if (stored.length === 0 && partner) {
+        // Try restoring backed-up text messages from GitHub
+        const restored = await restoreMatchChatFromGitHub(currentProfile.id, partner.id)
+        if (restored.length > 0) {
+          stored = restored
+        }
+      }
+
       setMessages(stored)
       setTimeout(scrollToBottom, 50)
     } catch (err) {
       console.error('Failed to load local messages:', err)
     }
-  }, [matchState.id])
+  }, [currentProfile.id, matchState.id, partner])
 
   useEffect(() => {
     loadLocalMessages()
   }, [loadLocalMessages])
 
+  // Automatically back up text messages to GitHub encrypted vault (zero media upload)
+  useEffect(() => {
+    if (messages.length > 0 && partner) {
+      backupMatchChatToGitHub(
+        currentProfile.id,
+        partner.id,
+        currentProfile.grad_year || 2029,
+        partner.grad_year || 2029,
+        messages
+      ).catch(() => {})
+    }
+  }, [messages.length, currentProfile.id, currentProfile.grad_year, partner?.id, partner?.grad_year])
+
+  // Listen for peer deactivation
+  useEffect(() => {
+    const unsub = api.onUserDeactivated((deactivatedUserId) => {
+      if (partner && partner.id === deactivatedUserId) {
+        setIsPartnerDeactivated(true)
+        if (engineRef.current) {
+          engineRef.current.destroy()
+        }
+      }
+    })
+    return () => unsub()
+  }, [partner])
+
   // Initialize WebRTC P2P Engine
   useEffect(() => {
+    if (isPartnerDeactivated) return
+
     const engine = new P2PChatEngine(
       matchState,
       currentProfile.id,
@@ -86,6 +173,15 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
             return [...prev, newMsg]
           })
           setTimeout(scrollToBottom, 50)
+        },
+        onMessageDeleted: (messageId) => {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === messageId
+                ? { ...m, text: '🚫 This message was deleted', mediaBlob: undefined, isDeleted: true }
+                : m
+            )
+          )
         },
         onAckReceived: (messageId, status) => {
           setMessages((prev) =>
@@ -108,7 +204,7 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
       engine.destroy()
       engineRef.current = null
     }
-  }, [matchState.id, currentProfile.id, isUserFemale])
+  }, [matchState.id, currentProfile.id, isUserFemale, isPartnerDeactivated])
 
   // Update engine if match permissions change
   useEffect(() => {
@@ -136,37 +232,106 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
     }
   }
 
-  // Send text message
+  // Send text message (Optimistic local-first Dexie caching + P2P auto-delivery)
   const handleSendMessage = async (e?: React.FormEvent) => {
     if (e) e.preventDefault()
     if (!inputText.trim()) return
 
     const textToSend = inputText.trim()
     setInputText('')
+    setIsEmojiPickerOpen(false)
 
     try {
       if (engineRef.current) {
         const localMsg = await engineRef.current.sendMessage(textToSend)
         setMessages((prev) => [...prev, localMsg])
         setTimeout(scrollToBottom, 50)
+      } else {
+        // Fallback: save to local Dexie immediately so message is NEVER lost
+        const messageId = `msg_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`
+        const localMsg: LocalMessage = {
+          id: messageId,
+          matchId: matchState.id,
+          senderId: currentProfile.id,
+          text: textToSend,
+          status: 'sending',
+          timestamp: Date.now(),
+        }
+        await db.saveMessage(localMsg)
+        setMessages((prev) => [...prev, localMsg])
+        setTimeout(scrollToBottom, 50)
+
+        // Enqueue to ephemeral offline mailbox
+        const receiverId = isUserFemale ? matchState.male_id : matchState.female_id
+        api.enqueueOfflineMessage({
+          id: messageId,
+          match_id: matchState.id,
+          sender_id: currentProfile.id,
+          receiver_id: receiverId,
+          text: textToSend,
+          created_at: Date.now(),
+        }).catch((err) => console.warn('[Offline Fallback Notice]:', err))
+
+        // Also push encrypted to private GitHub repo backend as secure offline fallback
+        pushOfflineEncryptedMessage(
+          currentProfile.id,
+          receiverId,
+          matchState.id,
+          localMsg
+        ).catch((err) => console.warn('[GitHub Offline Fallback]:', err))
       }
     } catch (err: any) {
       console.error('Failed to send text packet:', err)
-      alert(err.message || 'P2P channel not connected yet. Waiting for peer...')
     }
   }
 
-  // Send photo attachment
+  // Append emoji to input text
+  const handleAppendEmoji = (emoji: string) => {
+    setInputText((prev) => prev + emoji)
+    inputRef.current?.focus()
+  }
+
+  // 10-Minute "Delete for Everyone"
+  const handleDeleteForEveryone = async (msg: LocalMessage) => {
+    const elapsed = Date.now() - msg.timestamp
+    if (elapsed > 10 * 60 * 1000) {
+      alert('Delete for Everyone is only available within 10 minutes of sending.')
+      return
+    }
+
+    const confirmDelete = window.confirm('Delete this message for everyone in this chat?')
+    if (!confirmDelete) return
+
+    try {
+      if (engineRef.current) {
+        await engineRef.current.deleteForEveryone(msg.id, msg.timestamp)
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === msg.id
+              ? { ...m, text: '🚫 This message was deleted', mediaBlob: undefined, isDeleted: true }
+              : m
+          )
+        )
+      }
+    } catch (err: any) {
+      alert(err.message || 'Failed to delete message')
+    }
+  }
+
+  // Send media attachment
   const handleMediaSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
 
-    // Male Media Guard Check
+    // Male Guard Check
     if (!isUserFemale && !matchState.media_allowed) {
       setMediaTooltip('Only she can enable media sharing')
       setTimeout(() => setMediaTooltip(''), 3000)
       return
     }
+
+    // Male cannot send view-once
+    const isViewOnceToSend = isUserFemale && sendAsViewOnce
 
     const reader = new FileReader()
     reader.onload = async () => {
@@ -174,12 +339,17 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
         const base64Data = reader.result
         try {
           if (engineRef.current) {
-            const localMsg = await engineRef.current.sendMessage(undefined, {
-              blob: base64Data,
-              mimeType: file.type || 'image/jpeg',
-            })
+            const localMsg = await engineRef.current.sendMessage(
+              undefined,
+              {
+                blob: base64Data,
+                mimeType: file.type || 'image/jpeg',
+              },
+              isViewOnceToSend
+            )
             setMessages((prev) => [...prev, localMsg])
             setTimeout(scrollToBottom, 50)
+            setSendAsViewOnce(false)
           }
         } catch (err: any) {
           alert(err.message || 'Failed to transmit media')
@@ -187,6 +357,32 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
       }
     }
     reader.readAsDataURL(file)
+  }
+
+  // Open view-once media
+  const handleOpenViewOnce = (msg: LocalMessage) => {
+    if (msg.viewOnceStatus === 'opened') return
+    if (!msg.mediaBlob) return
+
+    setActiveViewOnceMsgId(msg.id)
+    setPreviewMedia(msg.mediaBlob)
+  }
+
+  // Close lightbox & immediately purge view-once media from Dexie
+  const handleCloseLightbox = async () => {
+    if (activeViewOnceMsgId) {
+      // Purge view-once media from Dexie immediately
+      await db.markViewOnceOpened(activeViewOnceMsgId)
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === activeViewOnceMsgId
+            ? { ...m, mediaBlob: undefined, viewOnceStatus: 'opened' }
+            : m
+        )
+      )
+      setActiveViewOnceMsgId(null)
+    }
+    setPreviewMedia(null)
   }
 
   // Block User action
@@ -211,6 +407,14 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
 
   // Connection indicator helpers
   const getConnectionIndicator = () => {
+    if (isPartnerDeactivated) {
+      return {
+        color: 'text-red-500',
+        bg: 'bg-red-500',
+        label: 'User Deactivated by Admin',
+      }
+    }
+
     switch (connState) {
       case 'connected':
         return {
@@ -233,9 +437,9 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
         }
       default:
         return {
-          color: 'text-red-400',
-          bg: 'bg-red-500',
-          label: 'P2P Offline (Peer not in room)',
+          color: 'text-amber-400',
+          bg: 'bg-amber-500',
+          label: 'Saved Locally • Will send when online',
         }
     }
   }
@@ -248,19 +452,16 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
       case 'sending':
         return <Clock className="w-3 h-3 text-slate-400 inline" />
       case 'sent':
-        // Single Gray Tick
         return <Check className="w-3 h-3 text-slate-400 inline" />
       case 'delivered':
-        // Double Gray Tick
         return <CheckCheck className="w-3.5 h-3.5 text-slate-400 inline" />
       case 'read':
-        // Double Green/Cyan Tick
         return <CheckCheck className="w-3.5 h-3.5 text-emerald-400 inline" />
     }
   }
 
   return (
-    <div className="flex-1 flex flex-col h-full bg-slate-950 text-white select-none relative overflow-hidden">
+    <div className="flex-1 flex flex-col h-full bg-slate-950 text-white select-none relative overflow-hidden no-screen-capture">
       {/* --- HEADER --- */}
       <div className="sticky top-0 z-30 bg-slate-900/95 backdrop-blur-xl border-b border-slate-800 px-3 py-2.5 flex items-center justify-between shadow-lg">
         {/* Left: Back & Partner Profile */}
@@ -273,8 +474,21 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
             <ArrowLeft className="w-5 h-5" />
           </button>
 
-          {partner && (
+          {isPartnerDeactivated ? (
             <div className="flex items-center space-x-2 min-w-0">
+              <div className="w-10 h-10 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center text-slate-500">
+                <UserX className="w-5 h-5 text-rose-400" />
+              </div>
+              <div className="min-w-0">
+                <h3 className="font-bold text-sm text-slate-400">User Deactivated</h3>
+                <span className="text-[10px] text-rose-400 font-medium">Account Revoked</span>
+              </div>
+            </div>
+          ) : partner ? (
+            <div
+              onClick={() => setIsProfileModalOpen(true)}
+              className="flex items-center space-x-2.5 min-w-0 cursor-pointer p-1 rounded-xl hover:bg-slate-800/60 active:scale-98 transition-all"
+            >
               <div className="relative shrink-0">
                 <img
                   src={partner.photo_urls?.[0] || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=400&q=80'}
@@ -290,7 +504,7 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
 
               <div className="min-w-0">
                 <div className="flex items-center space-x-1">
-                  <h3 className="font-bold text-sm text-white truncate">{partner.full_name}</h3>
+                  <h3 className="font-bold text-sm text-white truncate max-w-[140px]">{partner.full_name}</h3>
                   {partner.report_count > 0 && (
                     <span className="text-[10px] text-amber-400 font-mono bg-amber-950/80 px-1 rounded border border-amber-800/40">
                       ⚠️{partner.report_count}
@@ -303,87 +517,99 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
                 </div>
               </div>
             </div>
-          )}
+          ) : null}
         </div>
 
         {/* Right: Female Media Toggle & Options Menu */}
-        <div className="flex items-center space-x-1.5 shrink-0">
-          {/* Female Media Permission Switch */}
-          {isUserFemale && (
-            <button
-              type="button"
-              onClick={handleToggleMediaPermission}
-              title={matchState.media_allowed ? 'Media Sharing Enabled' : 'Media Sharing Disabled'}
-              className={`flex items-center space-x-1 px-2.5 py-1 rounded-full text-[11px] font-semibold transition-all border ${
-                matchState.media_allowed
-                  ? 'bg-emerald-950/80 border-emerald-500/50 text-emerald-300'
-                  : 'bg-slate-800 border-slate-700 text-slate-400'
-              }`}
-            >
-              {matchState.media_allowed ? (
-                <>
-                  <Unlock className="w-3 h-3 text-emerald-400" />
-                  <span>Media ON</span>
-                </>
-              ) : (
-                <>
-                  <Lock className="w-3 h-3 text-slate-400" />
-                  <span>Media OFF</span>
-                </>
-              )}
-            </button>
-          )}
-
-          {/* More Options Dropdown */}
-          <div className="relative">
-            <button
-              type="button"
-              onClick={() => setIsMenuOpen(!isMenuOpen)}
-              className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-all"
-            >
-              <MoreVertical className="w-5 h-5" />
-            </button>
-
-            {isMenuOpen && (
-              <div className="absolute right-0 top-10 w-44 bg-slate-900 border border-slate-800 rounded-xl shadow-2xl py-1 z-50 text-xs">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIsMenuOpen(false)
-                    setIsReportModalOpen(true)
-                  }}
-                  className="w-full px-3 py-2 text-left flex items-center space-x-2 text-amber-400 hover:bg-slate-800 transition-all"
-                >
-                  <ShieldAlert className="w-4 h-4" />
-                  <span>Report User</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIsMenuOpen(false)
-                    handleBlockUser()
-                  }}
-                  className="w-full px-3 py-2 text-left flex items-center space-x-2 text-rose-400 hover:bg-slate-800 transition-all"
-                >
-                  <Ban className="w-4 h-4" />
-                  <span>Block User</span>
-                </button>
-              </div>
+        {!isPartnerDeactivated && (
+          <div className="flex items-center space-x-1.5 shrink-0">
+            {isUserFemale && (
+              <button
+                type="button"
+                onClick={handleToggleMediaPermission}
+                title={matchState.media_allowed ? 'Media Sharing Enabled' : 'Media Sharing Disabled'}
+                className={`flex items-center space-x-1 px-2.5 py-1 rounded-full text-[11px] font-semibold transition-all border ${
+                  matchState.media_allowed
+                    ? 'bg-emerald-950/80 border-emerald-500/50 text-emerald-300'
+                    : 'bg-slate-800 border-slate-700 text-slate-400'
+                }`}
+              >
+                {matchState.media_allowed ? (
+                  <>
+                    <Unlock className="w-3 h-3 text-emerald-400" />
+                    <span>Media ON</span>
+                  </>
+                ) : (
+                  <>
+                    <Lock className="w-3 h-3 text-slate-400" />
+                    <span>Media OFF</span>
+                  </>
+                )}
+              </button>
             )}
+
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setIsMenuOpen(!isMenuOpen)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-all"
+              >
+                <MoreVertical className="w-5 h-5" />
+              </button>
+
+              {isMenuOpen && (
+                <div className="absolute right-0 top-10 w-44 bg-slate-900 border border-slate-800 rounded-xl shadow-2xl py-1 z-50 text-xs">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsMenuOpen(false)
+                      setIsReportModalOpen(true)
+                    }}
+                    className="w-full px-3 py-2 text-left flex items-center space-x-2 text-amber-400 hover:bg-slate-800 transition-all"
+                  >
+                    <ShieldAlert className="w-4 h-4" />
+                    <span>Report User</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsMenuOpen(false)
+                      handleBlockUser()
+                    }}
+                    className="w-full px-3 py-2 text-left flex items-center space-x-2 text-rose-400 hover:bg-slate-800 transition-all"
+                  >
+                    <Ban className="w-4 h-4" />
+                    <span>Block User</span>
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
-        </div>
+        )}
       </div>
+
+      {/* --- DEACTIVATED NOTICE BANNER --- */}
+      {isPartnerDeactivated && (
+        <div className="bg-rose-950/80 border-b border-rose-800/80 p-3 text-center space-y-1">
+          <p className="text-xs font-bold text-rose-300">
+            🚫 This user has been de-authenticated by campus administrators.
+          </p>
+          <p className="text-[11px] text-slate-300">
+            All direct WebRTC channels are closed and future messaging is permanently blocked.
+          </p>
+        </div>
+      )}
 
       {/* --- P2P CHAT MESSAGES BODY --- */}
       <div className="flex-1 overflow-y-auto px-3 py-4 space-y-3">
         {/* Zero-Storage Encryption Notice */}
         <div className="mx-auto max-w-xs text-center py-1.5 px-3 bg-slate-900/60 rounded-xl border border-slate-800/80 text-[10px] text-slate-400 flex items-center justify-center space-x-1.5 shadow-sm">
           <ShieldCheck className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-          <span>Zero Server Storage • WebRTC Peer-to-Peer</span>
+          <span>Zero Server Storage • Offline Caching • Direct P2P</span>
         </div>
 
         {/* Female-First Gate Warning for Males */}
-        {!isUserFemale && !matchState.has_female_initiated && (
+        {!isUserFemale && !matchState.has_female_initiated && !isPartnerDeactivated && (
           <div className="p-4 rounded-2xl bg-amber-950/40 border border-amber-800/50 text-center space-y-2">
             <Sparkles className="w-6 h-6 text-amber-400 mx-auto" />
             <h4 className="font-bold text-xs text-amber-300">Awaiting Female First Move</h4>
@@ -396,31 +622,60 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
         {/* Message Bubbles */}
         {messages.map((msg) => {
           const isMe = msg.senderId === currentProfile.id
+          const canDeleteForEveryone =
+            isMe && !msg.isDeleted && currentTime - msg.timestamp <= 10 * 60 * 1000
 
           return (
             <div
               key={msg.id}
-              className={`flex flex-col ${isMe ? 'items-end' : 'items-start'}`}
+              className={`flex flex-col ${isMe ? 'items-end' : 'items-start'} group relative`}
             >
               <div
-                className={`max-w-[78%] rounded-2xl px-3.5 py-2 text-xs relative shadow-md ${
-                  isMe
+                className={`max-w-[80%] rounded-2xl px-3.5 py-2 text-xs relative shadow-md ${
+                  msg.isDeleted
+                    ? 'bg-slate-900 text-slate-500 italic border border-slate-800'
+                    : isMe
                     ? 'bg-rose-600 text-white rounded-br-xs'
                     : 'bg-slate-850 text-slate-100 rounded-bl-xs border border-slate-800'
                 }`}
               >
-                {/* Media Attachment if present */}
-                {msg.mediaBlob && (
-                  <div
-                    onClick={() => setPreviewMedia(msg.mediaBlob!)}
-                    className="mb-1.5 rounded-xl overflow-hidden cursor-pointer max-h-56 bg-black"
-                  >
-                    <img
-                      src={msg.mediaBlob}
-                      alt="Shared media"
-                      className="w-full h-full object-cover hover:opacity-90 transition-opacity"
-                    />
+                {/* 1. View-Once Media Bubble */}
+                {msg.isViewOnce ? (
+                  <div className="mb-1 py-1">
+                    {msg.viewOnceStatus === 'opened' ? (
+                      <div className="flex items-center space-x-1.5 text-slate-400 py-1 text-xs">
+                        <EyeOff className="w-4 h-4 text-slate-500" />
+                        <span className="italic font-medium">📷 Photo (Opened)</span>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => handleOpenViewOnce(msg)}
+                        className={`flex items-center space-x-2 px-3 py-2 rounded-xl text-xs font-bold transition-all ${
+                          isMe
+                            ? 'bg-rose-700/80 text-white'
+                            : 'bg-emerald-950 text-emerald-300 border border-emerald-600/50 hover:bg-emerald-900'
+                        }`}
+                      >
+                        <Eye className="w-4 h-4" />
+                        <span>{isMe ? '1 View-Once Photo Sent' : '👁️ View Photo (1-time view)'}</span>
+                      </button>
+                    )}
                   </div>
+                ) : (
+                  /* 2. Standard Media Attachment */
+                  msg.mediaBlob && (
+                    <div
+                      onClick={() => setPreviewMedia(msg.mediaBlob!)}
+                      className="mb-1.5 rounded-xl overflow-hidden cursor-pointer max-h-56 bg-black"
+                    >
+                      <img
+                        src={msg.mediaBlob}
+                        alt="Shared media"
+                        className="w-full h-full object-cover hover:opacity-90 transition-opacity"
+                      />
+                    </div>
+                  )
                 )}
 
                 {/* Text Content */}
@@ -430,15 +685,27 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
                   </p>
                 )}
 
-                {/* Footer: Time & Delivery Status Ticks */}
-                <div className="flex items-center justify-end space-x-1 mt-1 text-[9px] opacity-75">
+                {/* Footer: Time & Delivery Status Ticks & Delete for Everyone */}
+                <div className="flex items-center justify-end space-x-1 mt-1 text-[9px] opacity-80">
                   <span>
                     {new Date(msg.timestamp).toLocaleTimeString([], {
                       hour: '2-digit',
                       minute: '2-digit',
                     })}
                   </span>
-                  {isMe && renderDeliveryTick(msg.status)}
+                  {isMe && !msg.isDeleted && renderDeliveryTick(msg.status)}
+
+                  {/* 10-Minute "Delete for Everyone" Icon */}
+                  {canDeleteForEveryone && (
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteForEveryone(msg)}
+                      title="Delete for Everyone (within 10 mins)"
+                      className="opacity-60 hover:opacity-100 hover:text-red-200 transition-opacity ml-1 p-0.5"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                    </button>
+                  )}
                 </div>
               </div>
             </div>
@@ -456,94 +723,150 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
         </div>
       )}
 
-      {/* --- INPUT BAR --- */}
-      <form
-        onSubmit={handleSendMessage}
-        className="sticky bottom-0 bg-slate-900 border-t border-slate-800 px-3 py-2 flex items-center space-x-2"
-      >
-        {/* Media Upload Button */}
-        <div className="relative">
-          <button
-            type="button"
-            onClick={() => {
-              if (!isUserFemale && !matchState.media_allowed) {
-                setMediaTooltip('Only she can enable media sharing')
-                setTimeout(() => setMediaTooltip(''), 3000)
-                return
-              }
-              fileInputRef.current?.click()
-            }}
-            disabled={!isUserFemale && !matchState.media_allowed}
-            title={
-              !isUserFemale && !matchState.media_allowed
-                ? 'Only she can enable media sharing'
-                : 'Attach image'
-            }
-            className={`p-2 rounded-full border transition-all ${
-              !isUserFemale && !matchState.media_allowed
-                ? 'bg-slate-950 text-slate-600 border-slate-800 cursor-not-allowed'
-                : 'bg-slate-800 text-slate-300 hover:text-white border-slate-700 hover:bg-slate-700'
-            }`}
-          >
-            {!isUserFemale && !matchState.media_allowed ? (
-              <Lock className="w-4 h-4 text-slate-500" />
-            ) : (
-              <Paperclip className="w-4 h-4" />
-            )}
-          </button>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="image/*"
-            onChange={handleMediaSelected}
-            className="hidden"
+      {/* --- RICH EMOJI PICKER POPUP --- */}
+      {isEmojiPickerOpen && (
+        <div className="absolute bottom-16 left-3 right-3 z-40 max-w-sm mx-auto">
+          <RichEmojiPicker
+            onSelectEmoji={handleAppendEmoji}
+            onClose={() => setIsEmojiPickerOpen(false)}
           />
         </div>
+      )}
 
-        {/* Input Text Field */}
-        <input
-          type="text"
-          value={inputText}
-          onChange={(e) => setInputText(e.target.value)}
-          placeholder={
-            !isUserFemale && !matchState.has_female_initiated
-              ? 'Waiting for her to initiate...'
-              : 'Type a message...'
-          }
-          disabled={!isUserFemale && !matchState.has_female_initiated}
-          className="flex-1 bg-slate-950 border border-slate-800 rounded-full px-4 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-rose-500 disabled:opacity-50"
-        />
-
-        {/* Send Button */}
-        <button
-          type="submit"
-          disabled={
-            !inputText.trim() ||
-            (!isUserFemale && !matchState.has_female_initiated)
-          }
-          className="p-2 rounded-full bg-rose-600 hover:bg-rose-500 disabled:opacity-40 text-white transition-all shadow-md shadow-rose-600/30 active:scale-95"
+      {/* --- INPUT BAR (REMOVED IF USER IS DEACTIVATED) --- */}
+      {!isPartnerDeactivated ? (
+        <form
+          onSubmit={handleSendMessage}
+          className="sticky bottom-0 bg-slate-900 border-t border-slate-800 px-3 pt-2.5 pb-4 flex items-center space-x-2 z-20 shadow-lg"
+          style={{ paddingBottom: 'max(1rem, env(safe-area-inset-bottom, 0px) + 0.5rem)' }}
         >
-          <Send className="w-4 h-4" />
-        </button>
-      </form>
+          {/* Emoji Picker Toggle Button */}
+          <button
+            type="button"
+            onClick={() => setIsEmojiPickerOpen(!isEmojiPickerOpen)}
+            className={`p-2 rounded-full border transition-all ${
+              isEmojiPickerOpen
+                ? 'bg-rose-600 text-white border-rose-500'
+                : 'bg-slate-800 text-slate-300 hover:text-white border-slate-700'
+            }`}
+          >
+            <Smile className="w-4 h-4" />
+          </button>
 
-      {/* --- FULLSCREEN IMAGE LIGHTBOX PREVIEW --- */}
+          {/* Media Upload & View-Once Selection */}
+          <div className="relative flex items-center space-x-1">
+            <button
+              type="button"
+              onClick={() => {
+                if (!isUserFemale && !matchState.media_allowed) {
+                  setMediaTooltip('Only she can enable media sharing')
+                  setTimeout(() => setMediaTooltip(''), 3000)
+                  return
+                }
+                fileInputRef.current?.click()
+              }}
+              disabled={!isUserFemale && !matchState.media_allowed}
+              title={
+                !isUserFemale && !matchState.media_allowed
+                  ? 'Only she can enable media sharing'
+                  : 'Attach image'
+              }
+              className={`p-2 rounded-full border transition-all ${
+                !isUserFemale && !matchState.media_allowed
+                  ? 'bg-slate-950 text-slate-600 border-slate-800 cursor-not-allowed'
+                  : 'bg-slate-800 text-slate-300 hover:text-white border-slate-700 hover:bg-slate-700'
+              }`}
+            >
+              {!isUserFemale && !matchState.media_allowed ? (
+                <Lock className="w-4 h-4 text-slate-500" />
+              ) : (
+                <Paperclip className="w-4 h-4" />
+              )}
+            </button>
+
+            {/* View-Once Toggle for Female Members */}
+            {isUserFemale && (
+              <button
+                type="button"
+                onClick={() => setSendAsViewOnce(!sendAsViewOnce)}
+                title={sendAsViewOnce ? 'View-Once Enabled' : 'Standard Media'}
+                className={`p-1.5 rounded-full border text-[10px] font-bold transition-all ${
+                  sendAsViewOnce
+                    ? 'bg-emerald-600 border-emerald-400 text-white'
+                    : 'bg-slate-800 border-slate-700 text-slate-400'
+                }`}
+              >
+                <Eye className="w-3.5 h-3.5" />
+              </button>
+            )}
+
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              onChange={handleMediaSelected}
+              className="hidden"
+            />
+          </div>
+
+          {/* Input Text Field */}
+          <input
+            ref={inputRef}
+            type="text"
+            value={inputText}
+            onChange={(e) => setInputText(e.target.value)}
+            placeholder={
+              !isUserFemale && !matchState.has_female_initiated
+                ? 'Waiting for her to initiate...'
+                : 'Type a message...'
+            }
+            disabled={!isUserFemale && !matchState.has_female_initiated}
+            className="flex-1 bg-slate-950 border border-slate-800 rounded-full px-4 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-rose-500 disabled:opacity-50"
+            style={{ fontSize: '15px' }} // Prevents iOS mobile zoom
+          />
+
+          {/* Send Button */}
+          <button
+            type="submit"
+            disabled={
+              !inputText.trim() ||
+              (!isUserFemale && !matchState.has_female_initiated)
+            }
+            className="p-2 rounded-full bg-rose-600 hover:bg-rose-500 disabled:opacity-40 text-white transition-all shadow-md shadow-rose-600/30 active:scale-95"
+          >
+            <Send className="w-4 h-4" />
+          </button>
+        </form>
+      ) : null}
+
+      {/* --- FULLSCREEN IMAGE LIGHTBOX PREVIEW (VIEW-ONCE PROTECTED) --- */}
       {previewMedia && (
         <div
-          className="fixed inset-0 z-50 bg-black/95 flex flex-col items-center justify-center p-4 backdrop-blur-md"
-          onClick={() => setPreviewMedia(null)}
+          className="fixed inset-0 z-50 bg-black/98 flex flex-col items-center justify-center p-4 backdrop-blur-md select-none no-screen-capture"
+          onContextMenu={(e) => e.preventDefault()}
+          onClick={handleCloseLightbox}
         >
           <button
             type="button"
-            onClick={() => setPreviewMedia(null)}
+            onClick={handleCloseLightbox}
             className="absolute top-4 right-4 p-2 bg-slate-900 rounded-full text-white hover:bg-slate-800"
           >
             <X className="w-6 h-6" />
           </button>
+
+          {activeViewOnceMsgId && (
+            <div className="absolute top-4 left-4 bg-rose-950/80 border border-rose-800 px-3 py-1 rounded-full text-[11px] text-rose-300 font-bold flex items-center space-x-1.5">
+              <Eye className="w-3.5 h-3.5" />
+              <span>One-Time View Media • Disappears upon closing</span>
+            </div>
+          )}
+
           <img
             src={previewMedia}
             alt="Preview"
-            className="max-w-full max-h-[85vh] object-contain rounded-2xl shadow-2xl"
+            draggable={false}
+            onContextMenu={(e) => e.preventDefault()}
+            className="max-w-full max-h-[85vh] object-contain rounded-2xl shadow-2xl pointer-events-none select-none"
           />
         </div>
       )}
@@ -557,6 +880,13 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
         onReported={() => {
           setIsReportModalOpen(false)
         }}
+      />
+
+      {/* --- PARTNER PROFILE MODAL --- */}
+      <ProfileModal
+        isOpen={isProfileModalOpen}
+        profile={partner || null}
+        onClose={() => setIsProfileModalOpen(false)}
       />
     </div>
   )

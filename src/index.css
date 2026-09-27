@@ -33,3 +33,13 @@ html, body {
   background: #334155;
   border-radius: 4px;
 }
+
+/* Screenshot & Screen Capture Restrictions */
+@media print {
+  body { display: none !important; }
+}
+.no-screen-capture {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}

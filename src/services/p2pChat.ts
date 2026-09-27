@@ -1,9 +1,19 @@
 import { db, type LocalMessage, type MessageStatus } from '../db'
 import { api, type MatchRecord } from './supabase'
+import { pushOfflineEncryptedMessage } from './githubRelay'
 
 export type P2PPacket = 
-  | { type: 'chat'; id: string; senderId: string; text?: string; media?: { blob: string; mimeType: string }; timestamp: number }
+  | {
+      type: 'chat'
+      id: string
+      senderId: string
+      text?: string
+      media?: { blob: string; mimeType: string }
+      isViewOnce?: boolean
+      timestamp: number
+    }
   | { type: 'ack'; messageId: string; status: 'delivered' | 'read' }
+  | { type: 'delete_msg'; messageId: string; timestamp: number }
 
 export type ConnectionState = 
   | 'idle'
@@ -16,6 +26,7 @@ export type ConnectionState =
 
 export interface P2PChatCallbacks {
   onMessageReceived: (message: LocalMessage) => void
+  onMessageDeleted?: (messageId: string) => void
   onAckReceived: (messageId: string, status: MessageStatus) => void
   onConnectionStateChange: (state: ConnectionState) => void
   onError: (error: string) => void
@@ -152,8 +163,12 @@ export class P2PChatEngine {
   private setupDataChannel(channel: RTCDataChannel): void {
     this.dataChannel = channel
 
-    this.dataChannel.onopen = () => {
+    this.dataChannel.onopen = async () => {
       this.setConnectionState('connected')
+
+      // Flush any queued / cached offline messages automatically
+      await this.flushPendingQueue()
+
       if (this.isChatWindowActive) {
         this.markAllUnreadAsRead()
       }
@@ -232,28 +247,48 @@ export class P2PChatEngine {
 
   /**
    * Handles incoming packets over RTCDataChannel.
-   * Enforces Media Guard, WhatsApp Ticks ACKs, and updates Dexie.js.
+   * Enforces Media Guard, View-Once rules, Delete-for-Everyone, ACKs, and Version Handshakes.
    */
   private async handleIncomingPacket(packet: P2PPacket): Promise<void> {
     if (packet.type === 'ack') {
-      // Incoming ACK: update local message state and emit to UI
       await db.updateMessageStatus(packet.messageId, packet.status)
       this.callbacks.onAckReceived(packet.messageId, packet.status)
       return
     }
 
+    if (packet.type === 'delete_msg') {
+      // Receiver processes "Delete for Everyone"
+      await db.deleteMessageForEveryone(packet.messageId)
+      this.callbacks.onMessageDeleted?.(packet.messageId)
+      return
+    }
+
     if (packet.type === 'chat') {
-      // --- MEDIA GUARD RULE ---
-      // If packet contains media, and current user is female while sender is male,
-      // inspect matches.media_allowed. If false, DROP PACKET IMMEDIATELY.
-      if (packet.media && this.isFemale && !this.matchInfo.media_allowed) {
-        console.warn('Media guard blocked unauthorized media transmission from male peer.')
-        return
+      // --- MEDIA GUARD RULES ---
+      if (packet.media) {
+        if (this.isFemale) {
+          // Male peer sending media to female peer
+          // Rule 1: One-time media sending is disabled for males
+          if (packet.isViewOnce) {
+            console.warn('Media guard blocked unauthorized view-once media from male peer.')
+            return
+          }
+          // Rule 2: Subject to female master media toggle
+          if (!this.matchInfo.media_allowed) {
+            console.warn('Media guard blocked unauthorized media transmission from male peer.')
+            return
+          }
+        } else {
+          // Female peer sending media to male peer:
+          // Rule: Female can send one-time (view-once) media without permissions!
+          // Standard media is permitted if female master media toggle is on OR isViewOnce is true.
+          if (!packet.isViewOnce && !this.matchInfo.media_allowed) {
+            console.warn('Standard media transmission blocked.')
+            return
+          }
+        }
       }
 
-      // Initial status when received:
-      // If window is active & in viewport -> 'read'
-      // Otherwise -> 'delivered'
       const initialStatus: MessageStatus = this.isChatWindowActive ? 'read' : 'delivered'
 
       const localMsg: LocalMessage = {
@@ -263,6 +298,8 @@ export class P2PChatEngine {
         text: packet.text,
         mediaBlob: packet.media?.blob,
         mediaType: packet.media?.mimeType,
+        isViewOnce: packet.isViewOnce,
+        viewOnceStatus: packet.isViewOnce ? 'unopened' : undefined,
         status: initialStatus,
         timestamp: packet.timestamp || Date.now(),
       }
@@ -292,16 +329,22 @@ export class P2PChatEngine {
   /**
    * Send text or media message over RTCDataChannel.
    */
-  public async sendMessage(text?: string, media?: { blob: string; mimeType: string }): Promise<LocalMessage> {
-    // Check male media guard
-    if (media && !this.isFemale && !this.matchInfo.media_allowed) {
-      throw new Error('Only she can enable media sharing')
+  public async sendMessage(
+    text?: string,
+    media?: { blob: string; mimeType: string },
+    isViewOnce: boolean = false
+  ): Promise<LocalMessage> {
+    // Male Guard Rules
+    if (!this.isFemale) {
+      if (isViewOnce) {
+        throw new Error('One-time (view-once) media sending is only permitted for female members')
+      }
+      if (media && !this.matchInfo.media_allowed) {
+        throw new Error('Only she can enable media sharing')
+      }
     }
 
-    if (!this.dataChannel || this.dataChannel.readyState !== 'open') {
-      throw new Error('P2P connection is not open yet')
-    }
-
+    const isChannelOpen = Boolean(this.dataChannel && this.dataChannel.readyState === 'open')
     const messageId = `msg_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`
     const now = Date.now()
 
@@ -311,10 +354,11 @@ export class P2PChatEngine {
       senderId: this.currentUserId,
       text,
       media,
+      isViewOnce,
       timestamp: now,
     }
 
-    // 1. Single Gray Tick ('sent'): pushed into RTCDataChannel
+    // Status: 'sent' if channel is currently open, else 'sending' (cached on device for automatic delivery once connected)
     const localMsg: LocalMessage = {
       id: messageId,
       matchId: this.matchId,
@@ -322,14 +366,88 @@ export class P2PChatEngine {
       text,
       mediaBlob: media?.blob,
       mediaType: media?.mimeType,
-      status: 'sent',
+      isViewOnce,
+      viewOnceStatus: isViewOnce ? 'unopened' : undefined,
+      status: isChannelOpen ? 'sent' : 'sending',
       timestamp: now,
     }
 
     await db.saveMessage(localMsg)
-    this.sendPacket(packet)
+
+    if (isChannelOpen) {
+      this.sendPacket(packet)
+    } else {
+      const receiverId = this.isFemale ? this.matchInfo.male_id : this.matchInfo.female_id
+      api.enqueueOfflineMessage({
+        id: messageId,
+        match_id: this.matchId,
+        sender_id: this.currentUserId,
+        receiver_id: receiverId,
+        text,
+        media_blob: media?.blob,
+        media_type: media?.mimeType,
+        is_view_once: isViewOnce,
+        created_at: now,
+      }).catch((err) => console.warn('[P2P Offline Enqueue Notice]:', err))
+
+      // Secondary encrypted offline relay to GitHub private repository
+      pushOfflineEncryptedMessage(this.currentUserId, receiverId, this.matchId, localMsg)
+        .catch((err) => console.warn('[GitHub Offline Relay Notice]:', err))
+    }
 
     return localMsg
+  }
+
+  /**
+   * Automatically flushes all cached offline messages once second device connects
+   */
+  public async flushPendingQueue(): Promise<void> {
+    if (!this.dataChannel || this.dataChannel.readyState !== 'open') return
+
+    try {
+      const messages = await db.getMessagesForMatch(this.matchId)
+      const pendingMessages = messages.filter(
+        (m) => m.senderId === this.currentUserId && m.status === 'sending'
+      )
+
+      for (const msg of pendingMessages) {
+        const packet: P2PPacket = {
+          type: 'chat',
+          id: msg.id,
+          senderId: this.currentUserId,
+          text: msg.text,
+          media: msg.mediaBlob && msg.mediaType ? { blob: msg.mediaBlob, mimeType: msg.mediaType } : undefined,
+          isViewOnce: msg.isViewOnce,
+          timestamp: msg.timestamp,
+        }
+        this.sendPacket(packet)
+        await db.updateMessageStatus(msg.id, 'sent')
+        this.callbacks.onAckReceived(msg.id, 'sent')
+      }
+    } catch (err) {
+      console.error('Failed to flush offline queue:', err)
+    }
+  }
+
+  /**
+   * 10-Minute "Delete for Everyone"
+   */
+  public async deleteForEveryone(messageId: string, timestamp: number): Promise<void> {
+    const elapsed = Date.now() - timestamp
+    if (elapsed > 10 * 60 * 1000) {
+      throw new Error('Messages older than 10 minutes cannot be deleted for everyone')
+    }
+
+    // 1. Dispatch WebRTC packet
+    this.sendPacket({
+      type: 'delete_msg',
+      messageId,
+      timestamp: Date.now(),
+    })
+
+    // 2. Clear sender's local storage
+    await db.deleteMessageForEveryone(messageId)
+    this.callbacks.onMessageDeleted?.(messageId)
   }
 
   private sendPacket(packet: P2PPacket): void {

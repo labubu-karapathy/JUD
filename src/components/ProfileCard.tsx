@@ -1,11 +1,27 @@
 import React, { useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Heart, X, ShieldAlert, Ban, BadgeCheck, AlertTriangle, ShieldX, ChevronLeft, ChevronRight } from 'lucide-react'
+import {
+  Heart,
+  X,
+  ShieldAlert,
+  Ban,
+  BadgeCheck,
+  AlertTriangle,
+  ShieldX,
+  ChevronLeft,
+  ChevronRight,
+  GraduationCap,
+  Building2,
+  Lock,
+  Clock,
+} from 'lucide-react'
 import { InstagramIcon } from './InstagramIcon'
-import { type Profile } from '../services/supabase'
+import { type Profile, calculateCurrentAge } from '../services/supabase'
 
 interface ProfileCardProps {
   profile: Profile
+  viewerProfile: Profile
+  requestStatus?: 'pending' | 'accepted' | 'rejected' | null
   onLike: (profile: Profile) => void
   onPass: (profile: Profile) => void
   onBlock: (profile: Profile) => void
@@ -14,6 +30,8 @@ interface ProfileCardProps {
 
 export const ProfileCard: React.FC<ProfileCardProps> = ({
   profile,
+  viewerProfile,
+  requestStatus,
   onLike,
   onPass,
   onBlock,
@@ -33,6 +51,11 @@ export const ProfileCard: React.FC<ProfileCardProps> = ({
     e.stopPropagation()
     setPhotoIndex((prev) => (prev - 1 + photos.length) % photos.length)
   }
+
+  const isViewerFemale = viewerProfile.gender === 'female'
+  const isTargetMale = profile.gender === 'male'
+  // Rule: Females can view male Instagram handles directly on cards
+  const canViewInstagram = isViewerFemale || !isTargetMale
 
   return (
     <motion.div
@@ -100,16 +123,27 @@ export const ProfileCard: React.FC<ProfileCardProps> = ({
       {/* Top Header: Instagram Badge & Safety Counters */}
       <div className="relative z-10 p-4 flex items-start justify-between">
         <div className="flex flex-col space-y-1.5">
-          <a
-            href={`https://instagram.com/${profile.insta_handle.replace('@', '')}`}
-            target="_blank"
-            rel="noopener noreferrer"
-            onClick={(e) => e.stopPropagation()}
-            className="inline-flex items-center space-x-1 bg-black/60 hover:bg-black/80 backdrop-blur-md border border-white/10 px-2.5 py-1 rounded-full text-xs text-rose-300 font-medium transition-all shadow-md"
-          >
-            <InstagramIcon className="w-3.5 h-3.5 text-rose-400" />
-            <span>{profile.insta_handle}</span>
-          </a>
+          {/* Instagram Handle Badge: Females see male IG directly */}
+          {canViewInstagram ? (
+            <a
+              href={`https://instagram.com/${profile.insta_handle.replace('@', '')}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={(e) => e.stopPropagation()}
+              className="inline-flex items-center space-x-1 bg-black/60 hover:bg-black/80 backdrop-blur-md border border-white/10 px-2.5 py-1 rounded-full text-xs text-rose-300 font-medium transition-all shadow-md"
+            >
+              <InstagramIcon className="w-3.5 h-3.5 text-rose-400" />
+              <span>{profile.insta_handle}</span>
+            </a>
+          ) : (
+            <div
+              title="Instagram unlocks when request is accepted"
+              className="inline-flex items-center space-x-1 bg-black/60 backdrop-blur-md border border-white/10 px-2.5 py-1 rounded-full text-xs text-slate-400 font-medium shadow-md"
+            >
+              <Lock className="w-3.5 h-3.5 text-slate-500" />
+              <span>IG Locked (Approval Required)</span>
+            </div>
+          )}
 
           {profile.is_verified && (
             <div className="inline-flex items-center space-x-1 bg-emerald-950/70 backdrop-blur-md border border-emerald-500/30 px-2 py-0.5 rounded-full text-[10px] text-emerald-300 font-medium">
@@ -134,18 +168,38 @@ export const ProfileCard: React.FC<ProfileCardProps> = ({
       </div>
 
       {/* Bottom Profile Details & Interaction Buttons */}
-      <div className="relative z-10 p-5 space-y-4">
-        {/* Bio and Name */}
-        <div className="space-y-1">
-          <div className="flex items-baseline space-x-2">
-            <h2 className="text-2xl font-black text-white tracking-tight">{profile.full_name}</h2>
-            <span className="text-xl font-bold text-rose-400">{profile.age}</span>
-            <span className="text-xs uppercase tracking-wider text-slate-400 font-semibold px-2 py-0.5 bg-slate-800/80 rounded-md">
+      <div className="relative z-10 p-4 space-y-3">
+        {/* Name, Age, Gender badge */}
+        <div className="space-y-1 min-w-0">
+          <div className="flex items-baseline gap-2 flex-wrap min-w-0">
+            <h2 className="text-xl font-black text-white tracking-tight truncate min-w-0 max-w-[55%]">
+              {profile.full_name}
+            </h2>
+            <span className="text-lg font-bold text-rose-400 shrink-0">{calculateCurrentAge(profile)}</span>
+            <span className="text-[10px] uppercase tracking-wider text-slate-400 font-semibold px-2 py-0.5 bg-slate-800/80 rounded-md shrink-0">
               {profile.gender}
             </span>
           </div>
 
-          <p className="text-xs text-slate-300 line-clamp-3 leading-relaxed">
+          {/* Department & Grad Year Badge */}
+          {(profile.department || profile.grad_year) && (
+            <div className="flex items-center gap-1.5 flex-wrap min-w-0 text-[10px] text-slate-300 pt-0.5">
+              {profile.department && (
+                <span className="inline-flex items-center gap-1 bg-slate-900/80 px-2 py-0.5 rounded-md border border-slate-800 min-w-0 max-w-full">
+                  <Building2 className="w-3 h-3 text-sky-400 shrink-0" />
+                  <span className="truncate">{profile.department}</span>
+                </span>
+              )}
+              {profile.grad_year && (
+                <span className="inline-flex items-center gap-1 bg-slate-900/80 px-2 py-0.5 rounded-md border border-slate-800 shrink-0">
+                  <GraduationCap className="w-3 h-3 text-amber-400" />
+                  <span>Class of {profile.grad_year}</span>
+                </span>
+              )}
+            </div>
+          )}
+
+          <p className="text-xs text-slate-300 line-clamp-2 leading-relaxed pt-0.5">
             {profile.bio || 'Campus explorer. Reach out to connect!'}
           </p>
         </div>
@@ -172,15 +226,22 @@ export const ProfileCard: React.FC<ProfileCardProps> = ({
             <X className="w-7 h-7" />
           </button>
 
-          {/* Like Button */}
-          <button
-            type="button"
-            onClick={() => onLike(profile)}
-            title="Like & Match"
-            className="w-16 h-16 rounded-2xl bg-gradient-to-tr from-rose-600 to-pink-500 hover:from-rose-500 hover:to-pink-400 text-white flex items-center justify-center transition-all active:scale-95 shadow-xl shadow-rose-600/30"
-          >
-            <Heart className="w-8 h-8 fill-white" />
-          </button>
+          {/* Like / Chat Request Button */}
+          {requestStatus === 'pending' ? (
+            <div className="px-4 py-3 rounded-2xl bg-amber-950/80 border border-amber-600/40 text-amber-300 flex items-center space-x-1.5 shadow-lg text-xs font-bold">
+              <Clock className="w-4 h-4 animate-spin text-amber-400" />
+              <span>Request Pending</span>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => onLike(profile)}
+              title={!isViewerFemale ? 'Send Chat Request (Female-First)' : 'Like & Match'}
+              className="w-16 h-16 rounded-2xl bg-gradient-to-tr from-rose-600 to-pink-500 hover:from-rose-500 hover:to-pink-400 text-white flex items-center justify-center transition-all active:scale-95 shadow-xl shadow-rose-600/30"
+            >
+              <Heart className="w-8 h-8 fill-white" />
+            </button>
+          )}
 
           {/* Report Button */}
           <button

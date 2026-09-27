@@ -4,11 +4,16 @@ import { Discover } from './pages/Discover'
 import { Matches } from './pages/Matches'
 import { ChatRoom } from './pages/ChatRoom'
 import { ProfileView } from './pages/ProfileView'
+import { AdminDashboard } from './admin/AdminDashboard'
 import { BottomNav, type NavTab } from './components/BottomNav'
 import { SecurityLock } from './components/SecurityLock'
 import { InstallPwaBanner } from './components/InstallPwaBanner'
-import { api, type Profile, type MatchRecord } from './services/supabase'
+import { api, type Profile, type MatchRecord, type GlobalAnnouncement } from './services/supabase'
 import { db } from './db'
+import { AlertOctagon, Radio, X, Sparkles } from 'lucide-react'
+import { onOTAUpdateNotification, type UpdateNotice } from './services/p2pUpdater'
+import { checkGitHubRepoUpdate, drainOfflineEncryptedMessages } from './services/githubRelay'
+import { GlobalCampusChatDrawer } from './components/GlobalCampusChatDrawer'
 
 export const App: React.FC = () => {
   const [currentProfile, setCurrentProfile] = useState<Profile | null>(null)
@@ -17,23 +22,88 @@ export const App: React.FC = () => {
   const [activeChatMatch, setActiveChatMatch] = useState<MatchRecord | null>(null)
   const [isManualLocked, setIsManualLocked] = useState<boolean>(false)
   const [unreadCount, setUnreadCount] = useState<number>(0)
+  const [activeAnnouncement, setActiveAnnouncement] = useState<GlobalAnnouncement | null>(null)
+  const [otaNotice, setOtaNotice] = useState<UpdateNotice | null>(null)
+  const [isGlobalChatOpen, setIsGlobalChatOpen] = useState<boolean>(false)
 
-  // Load existing session/profile
+  // Route state: User Interface vs Admin Desktop Suite
+  const [isAdminRoute, setIsAdminRoute] = useState<boolean>(() => {
+    return (
+      typeof window !== 'undefined' &&
+      (window.location.hash.startsWith('#/admin') || window.location.pathname.startsWith('/admin'))
+    )
+  })
+
+  // Listen to hash changes for #/admin
+  useEffect(() => {
+    const handleHashChange = () => {
+      setIsAdminRoute(
+        window.location.hash.startsWith('#/admin') || window.location.pathname.startsWith('/admin')
+      )
+    }
+    window.addEventListener('hashchange', handleHashChange)
+    window.addEventListener('popstate', handleHashChange)
+    return () => {
+      window.removeEventListener('hashchange', handleHashChange)
+      window.removeEventListener('popstate', handleHashChange)
+    }
+  }, [])
+
+  // Initialize Privacy Screen for Android / iOS
+  useEffect(() => {
+    const initPrivacyScreen = async () => {
+      try {
+        const { PrivacyScreen } = await import('@capacitor-community/privacy-screen')
+        await PrivacyScreen.enable()
+      } catch {
+        // Expected in standard browser web environment
+      }
+    }
+    initPrivacyScreen()
+  }, [])
+
+  // Load existing session/profile and purge legacy dummy data
   useEffect(() => {
     const initUser = async () => {
       try {
+        // Clean legacy mock localStorage keys
+        localStorage.removeItem('jud_mock_profiles')
+        localStorage.removeItem('jud_mock_matches')
+        localStorage.removeItem('jud_mock_blocks')
+        localStorage.removeItem('jud_mock_reports')
+        localStorage.removeItem('jud_mock_chat_requests')
+
+        // Purge known legacy false students from local Dexie IndexedDB cache
+        const DUMMY_IDS = [
+          '11111111-1111-4111-8111-111111111111',
+          '22222222-2222-4222-8222-222222222222',
+          '33333333-3333-4333-8333-333333333333',
+          '44444444-4444-4444-8444-444444444444',
+          '55555555-5555-4555-8555-555555555555',
+          '66666666-6666-4666-8666-666666666666',
+          'e954a879-d9f1-493b-92ed-5a58ffe70663'
+        ]
+        for (const dummyId of DUMMY_IDS) {
+          await db.cached_profiles.delete(dummyId)
+        }
+
         const storedUserId = localStorage.getItem('jud_current_user_id')
         if (storedUserId) {
-          // Check local Dexie first (offline-first)
-          const cached = await db.getCachedProfile(storedUserId)
-          if (cached) {
-            setCurrentProfile(cached as Profile)
-          }
-
-          // Then verify/sync with remote Supabase
-          const remote = await api.getProfile(storedUserId)
-          if (remote) {
-            setCurrentProfile(remote)
+          if (DUMMY_IDS.includes(storedUserId)) {
+            localStorage.removeItem('jud_current_user_id')
+            await db.cached_profiles.clear()
+            setCurrentProfile(null)
+          } else {
+            // Verify session with remote Supabase
+            const remote = await api.getProfile(storedUserId)
+            if (remote) {
+              setCurrentProfile(remote)
+            } else {
+              // Remote profile was deleted/purged on server
+              localStorage.removeItem('jud_current_user_id')
+              await db.cached_profiles.clear()
+              setCurrentProfile(null)
+            }
           }
         }
       } catch (err) {
@@ -44,6 +114,31 @@ export const App: React.FC = () => {
     }
 
     initUser()
+  }, [])
+
+  // Global Announcements Subscription
+  useEffect(() => {
+    const unsub = api.subscribeGlobalAnnouncements((announcement) => {
+      setActiveAnnouncement(announcement)
+    })
+    return () => unsub()
+  }, [])
+
+  // GitHub JUD Fleet Auto-Updates (clean repository pulling)
+  useEffect(() => {
+    const unsubNotice = onOTAUpdateNotification((notice) => {
+      setOtaNotice(notice)
+      setTimeout(() => {
+        setOtaNotice(null)
+      }, 7000)
+    })
+
+    // Check GitHub JUD repository for fleet updates
+    checkGitHubRepoUpdate().catch((err) => console.warn('[GitHub Auto-Update Check]:', err))
+
+    return () => {
+      unsubNotice()
+    }
   }, [])
 
   // Poll/track unread count for bottom nav badge
@@ -66,6 +161,58 @@ export const App: React.FC = () => {
     return () => clearInterval(interval)
   }, [updateUnreadBadge])
 
+  // Zero-Storage Ephemeral Offline Message Drain & Realtime Inbox
+  useEffect(() => {
+    if (!currentProfile) return
+
+    const drainOfflineMessages = async () => {
+      try {
+        const queued = await api.fetchAndDrainOfflineMessages(currentProfile.id)
+        if (queued && queued.length > 0) {
+          for (const item of queued) {
+            const localMsg = {
+              id: item.id,
+              matchId: item.match_id,
+              senderId: item.sender_id,
+              text: item.text,
+              mediaBlob: item.media_blob,
+              mediaType: item.media_type,
+              isViewOnce: item.is_view_once,
+              viewOnceStatus: item.is_view_once ? ('unopened' as const) : undefined,
+              status: 'delivered' as const,
+              timestamp: item.created_at || Date.now(),
+            }
+            await db.saveMessage(localMsg)
+          }
+          await updateUnreadBadge()
+        }
+
+        // Drain secondary encrypted GitHub inbox (ephemeral zero-footprint)
+        const ghMessages = await drainOfflineEncryptedMessages(currentProfile.id)
+        if (ghMessages && ghMessages.length > 0) {
+          await updateUnreadBadge()
+        }
+      } catch (err) {
+        console.warn('Failed to drain offline messages:', err)
+      }
+    }
+
+    drainOfflineMessages()
+
+    const inbox = api.createUserSignalChannel(currentProfile.id, async (payload) => {
+      if (!payload) return
+      if (payload.type === 'offline_queue_ping') {
+        await drainOfflineMessages()
+      } else if (payload.type === 'ack' && payload.messageId) {
+        await db.updateMessageStatus(payload.messageId, payload.status)
+      }
+    })
+
+    return () => {
+      inbox.unsubscribe()
+    }
+  }, [currentProfile?.id, updateUnreadBadge])
+
   const handleAuthSuccess = (profile: Profile) => {
     setCurrentProfile(profile)
     setActiveTab('discover')
@@ -81,6 +228,19 @@ export const App: React.FC = () => {
     setActiveTab('discover')
   }
 
+  // --- ADMIN DESKTOP SUITE ROUTE ---
+  if (isAdminRoute) {
+    return (
+      <AdminDashboard
+        onExit={() => {
+          window.location.hash = ''
+          setIsAdminRoute(false)
+        }}
+      />
+    )
+  }
+
+  // --- LOADING SCREEN ---
   if (isLoadingAuth) {
     return (
       <div className="max-w-md mx-auto min-h-screen bg-slate-950 text-white flex flex-col items-center justify-center space-y-4">
@@ -97,13 +257,146 @@ export const App: React.FC = () => {
     )
   }
 
+  // --- USER DEACTIVATION SCREEN ---
+  if (currentProfile?.is_deactivated) {
+    return (
+      <div className="max-w-md mx-auto min-h-screen bg-slate-950 text-white flex flex-col items-center justify-center p-6 text-center space-y-4 border-x border-slate-900/60">
+        <div className="w-16 h-16 rounded-2xl bg-rose-500/10 border border-rose-500/20 text-rose-500 flex items-center justify-center shadow-xl">
+          <AlertOctagon className="w-8 h-8" />
+        </div>
+        <h2 className="text-xl font-black text-white">Account De-Authenticated</h2>
+        <p className="text-xs text-slate-300 leading-relaxed max-w-xs">
+          Your profile has been de-authenticated by campus administrators in accordance with university safety protocols.
+        </p>
+        {currentProfile.deactivation_reason && (
+          <div className="p-3 bg-rose-950/60 border border-rose-900/60 rounded-xl text-xs text-rose-300 text-left w-full">
+            <span className="font-bold block text-[10px] uppercase">Reason Stated:</span>
+            {currentProfile.deactivation_reason}
+          </div>
+        )}
+        <button
+          type="button"
+          onClick={handleLogout}
+          className="px-6 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-xl"
+        >
+          Log Out
+        </button>
+      </div>
+    )
+  }
+
+  // --- PENDING ADMIN APPROVAL SCREEN ---
+  if (currentProfile && currentProfile.is_approved === false && !currentProfile.is_deactivated) {
+    return (
+      <div className="max-w-md mx-auto min-h-screen bg-slate-950 text-white flex flex-col items-center justify-center p-6 text-center space-y-5 border-x border-slate-900/60">
+        <div className="w-20 h-20 rounded-3xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center shadow-xl">
+          <img src="/icon.png" alt="JLB" className="w-12 h-12 rounded-2xl object-cover" />
+        </div>
+        <div className="space-y-2">
+          <h2 className="text-xl font-black text-white">Profile Under Review</h2>
+          <p className="text-xs text-slate-400 leading-relaxed max-w-xs mx-auto">
+            Your Jadavpur Love Birds profile is pending admin verification. Once approved, you'll gain full access to the campus network.
+          </p>
+        </div>
+        <div className="w-full p-4 bg-amber-950/30 border border-amber-800/40 rounded-2xl space-y-2">
+          <p className="text-[11px] text-amber-300 font-semibold uppercase tracking-wider">What happens next?</p>
+          <ul className="text-[11px] text-amber-200/80 space-y-1 text-left list-disc list-inside">
+            <li>Admin reviews your library card & profile details</li>
+            <li>Approval typically happens within a few hours</li>
+            <li>Refresh the app after approval to start matching</li>
+          </ul>
+        </div>
+        <div className="flex gap-3 w-full">
+          <button
+            type="button"
+            onClick={async () => {
+              try {
+                const refreshed = await api.getProfile(currentProfile.id)
+                if (refreshed) setCurrentProfile(refreshed)
+              } catch { /* silent */ }
+            }}
+            className="flex-1 py-3 bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold rounded-2xl transition-all"
+          >
+            🔄 Check Approval Status
+          </button>
+          <button
+            type="button"
+            onClick={handleLogout}
+            className="py-3 px-4 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-2xl transition-all"
+          >
+            Log Out
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  // --- USER CLIENT MOBILE VIEW ---
   return (
     <SecurityLock
       userFullName={currentProfile?.full_name}
       isLockedManual={isManualLocked}
       onManualUnlock={() => setIsManualLocked(false)}
     >
-      <div className="max-w-md mx-auto min-h-screen bg-slate-950 text-white shadow-2xl relative flex flex-col overflow-hidden border-x border-slate-900/60">
+      <div
+        className="max-w-md mx-auto min-h-screen bg-slate-950 text-white shadow-2xl relative flex flex-col overflow-hidden border-x border-slate-900/60 no-screen-capture"
+        style={{
+          paddingTop: 'max(0.75rem, env(safe-area-inset-top, 0px))',
+          paddingBottom: 'env(safe-area-inset-bottom, 0px)',
+        }}
+      >
+        {/* OTA Auto-Update Live Synchronization Banner (Authenticated Users Only) */}
+        {currentProfile && otaNotice && (
+          <div className="bg-emerald-950/95 border-b border-emerald-500/50 px-3.5 py-2.5 flex items-center justify-between text-xs text-emerald-200 z-50 shadow-lg backdrop-blur-md animate-in slide-in-from-top duration-300">
+            <div className="flex items-center space-x-2.5 truncate">
+              <div className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping shrink-0" />
+              <div className="truncate">
+                <div className="font-bold text-[11px] text-emerald-300 flex items-center gap-1.5">
+                  <span>🚀 Live Campus Sync (v{otaNotice.version})</span>
+                  <span className="text-[9px] bg-emerald-900/80 px-1.5 py-0.5 rounded text-emerald-400 border border-emerald-700/60 uppercase">
+                    {otaNotice.source === 'github_jud' ? 'GitHub JUD' : 'Auto-Update'}
+                  </span>
+                </div>
+                <p className="text-[10px] text-emerald-400/90 truncate">{otaNotice.message} • All chats preserved</p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setOtaNotice(null)}
+              className="p-1 text-emerald-400 hover:text-white shrink-0 ml-2"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
+
+        {/* Global Announcement Alert Banner (Authenticated Users Only) */}
+        {currentProfile && activeAnnouncement && (
+          <div className="bg-amber-950/90 border-b border-amber-800/80 px-3 py-1.5 flex items-center justify-between text-xs text-amber-200 z-50">
+            <div className="flex items-center space-x-2 truncate">
+              <Radio className="w-3.5 h-3.5 shrink-0 text-amber-400 animate-pulse" />
+              <span className="truncate text-[11px] font-medium">{activeAnnouncement.content}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setActiveAnnouncement(null)}
+              className="p-0.5 text-amber-400 hover:text-white shrink-0 ml-2"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
+
+        {/* Campus Global Chat Slide-Over Drawer (Verified Registered Students Only) */}
+        {currentProfile && currentProfile.is_approved && (
+          <GlobalCampusChatDrawer
+            currentProfile={currentProfile}
+            isOpen={isGlobalChatOpen}
+            onClose={() => setIsGlobalChatOpen(false)}
+            onOpen={() => setIsGlobalChatOpen(true)}
+          />
+        )}
+
         {!currentProfile ? (
           <Auth onAuthSuccess={handleAuthSuccess} />
         ) : activeChatMatch ? (
@@ -139,6 +432,7 @@ export const App: React.FC = () => {
               <ProfileView
                 currentProfile={currentProfile}
                 onLogout={handleLogout}
+                onProfileUpdated={(updated) => setCurrentProfile(updated)}
               />
             )}
 

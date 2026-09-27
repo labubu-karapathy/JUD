@@ -17,7 +17,10 @@ export const BottomNav: React.FC<BottomNavProps> = ({
   unreadCount = 0,
 }) => {
   return (
-    <div className="sticky bottom-0 z-40 bg-slate-950/95 backdrop-blur-xl border-t border-slate-800/80 px-4 py-2 flex items-center justify-around shadow-2xl">
+    <div
+      className="sticky bottom-0 z-40 bg-slate-950/95 backdrop-blur-xl border-t border-slate-800/80 px-4 pt-2 pb-3 flex items-center justify-around shadow-2xl"
+      style={{ paddingBottom: 'max(0.75rem, env(safe-area-inset-bottom, 0px))' }}
+    >
       {/* Discover Tab */}
       <button
         type="button"

@@ -16,27 +16,14 @@ export const SecurityLock: React.FC<SecurityLockProps> = ({
 }) => {
   const [isLocked, setIsLocked] = useState<boolean>(false)
 
-  // Listen for visibilitychange and window blur to instantly trigger lock on backgrounding
+  // Lock only when explicit manual lock is triggered (e.g. from bottom nav or settings)
+  // or when explicit lock flag is set, not on every single window minimize/blur
   useEffect(() => {
-    const handleVisibilityChange = () => {
-      if (document.hidden) {
-        setIsLocked(true)
-      }
-    }
-
-    const handleWindowBlur = () => {
-      // Trigger instant lock when user tabs out or shifts away
+    // If the user wants to lock manually via the Lock button
+    if (isLockedManual) {
       setIsLocked(true)
     }
-
-    document.addEventListener('visibilitychange', handleVisibilityChange)
-    window.addEventListener('blur', handleWindowBlur)
-
-    return () => {
-      document.removeEventListener('visibilitychange', handleVisibilityChange)
-      window.removeEventListener('blur', handleWindowBlur)
-    }
-  }, [])
+  }, [isLockedManual])
 
   // Sync with external manual lock toggle if passed
   useEffect(() => {

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react'
-import { Fingerprint, Delete, ShieldAlert, Lock, ShieldCheck } from 'lucide-react'
-import { sha256, vibrateDevice, authenticateWithBiometrics, isBiometricsAvailable } from '../utils/crypto'
+import { Delete, ShieldAlert, Lock, ShieldCheck } from 'lucide-react'
+import { sha256, vibrateDevice } from '../utils/crypto'
 
 interface LockScreenProps {
   isLocked: boolean
@@ -18,13 +18,6 @@ export const LockScreen: React.FC<LockScreenProps> = ({
   const [pin, setPin] = useState<string>('')
   const [errorMsg, setErrorMsg] = useState<string>('')
   const [isShaking, setIsShaking] = useState<boolean>(false)
-  const [hasBiometrics, setHasBiometrics] = useState<boolean>(false)
-  const [isAuthenticatingBio, setIsAuthenticatingBio] = useState<boolean>(false)
-
-  // Check if biometric authentication is available on device
-  useEffect(() => {
-    isBiometricsAvailable().then((avail) => setHasBiometrics(avail))
-  }, [])
 
   // Auto-attempt biometric check when screen locks
   useEffect(() => {
@@ -47,9 +40,8 @@ export const LockScreen: React.FC<LockScreenProps> = ({
       const storedHash = localStorage.getItem(PIN_STORAGE_KEY)
       const enteredHash = await sha256(enteredPin)
 
-      // If no PIN has been set yet, treat 0000 or the newly entered PIN as valid setup
       if (!storedHash) {
-        localStorage.setItem(PIN_STORAGE_KEY, enteredHash)
+        // If no passcode was configured yet, allow unlocking
         onUnlock()
         return
       }
@@ -59,7 +51,7 @@ export const LockScreen: React.FC<LockScreenProps> = ({
         setErrorMsg('')
         onUnlock()
       } else {
-        triggerFailure('Incorrect PIN. Try again.')
+        triggerFailure('Incorrect passcode. Try again.')
       }
     } catch {
       triggerFailure('Authentication error.')
@@ -67,13 +59,22 @@ export const LockScreen: React.FC<LockScreenProps> = ({
   }, [onUnlock, triggerFailure])
 
   const handleDigitPress = (digit: string) => {
-    if (pin.length < 4) {
+    if (pin.length < 6) {
       const newPin = pin + digit
       setPin(newPin)
       setErrorMsg('')
 
-      if (newPin.length === 4) {
-        verifyPin(newPin)
+      if (newPin.length >= 4) {
+        sha256(newPin).then((enteredHash) => {
+          const storedHash = localStorage.getItem(PIN_STORAGE_KEY)
+          if (enteredHash === storedHash) {
+            setPin('')
+            setErrorMsg('')
+            onUnlock()
+          } else if (newPin.length === 6) {
+            triggerFailure('Incorrect passcode. Try again.')
+          }
+        })
       }
     }
   }
@@ -81,23 +82,6 @@ export const LockScreen: React.FC<LockScreenProps> = ({
   const handleDelete = () => {
     setPin((prev) => prev.slice(0, -1))
     setErrorMsg('')
-  }
-
-  const handleBiometricAuth = async () => {
-    setIsAuthenticatingBio(true)
-    setErrorMsg('')
-    try {
-      const success = await authenticateWithBiometrics()
-      if (success) {
-        onUnlock()
-      } else {
-        triggerFailure('Biometrics not recognized')
-      }
-    } catch {
-      triggerFailure('Biometric check failed')
-    } finally {
-      setIsAuthenticatingBio(false)
-    }
   }
 
   if (!isLocked) return null
@@ -126,13 +110,13 @@ export const LockScreen: React.FC<LockScreenProps> = ({
 
       {/* PIN Dots & Status */}
       <div className={`flex flex-col items-center space-y-4 my-auto ${isShaking ? 'animate-bounce text-red-400' : ''}`}>
-        <div className="flex items-center space-x-5">
-          {[0, 1, 2, 3].map((index) => {
+        <div className="flex items-center space-x-4">
+          {[0, 1, 2, 3, 4, 5].map((index) => {
             const isFilled = pin.length > index
             return (
               <div
                 key={index}
-                className={`w-4 h-4 rounded-full transition-all duration-200 ${
+                className={`w-3.5 h-3.5 rounded-full transition-all duration-200 ${
                   isFilled
                     ? 'bg-rose-500 scale-125 shadow-md shadow-rose-500/50'
                     : 'bg-slate-800 border border-slate-700'
@@ -148,7 +132,7 @@ export const LockScreen: React.FC<LockScreenProps> = ({
             <span>{errorMsg}</span>
           </div>
         ) : (
-          <p className="text-xs text-slate-500">Enter 4-digit PIN or use Biometrics</p>
+          <p className="text-xs text-slate-500">Enter your 4 to 6 digit Master Passcode</p>
         )}
       </div>
 
@@ -165,17 +149,8 @@ export const LockScreen: React.FC<LockScreenProps> = ({
           </button>
         ))}
 
-        {/* Biometrics button */}
-        <button
-          type="button"
-          onClick={handleBiometricAuth}
-          disabled={isAuthenticatingBio}
-          className="w-18 h-18 rounded-full bg-slate-900/80 border border-slate-800 flex flex-col items-center justify-center hover:bg-slate-800 active:scale-95 transition-all text-rose-400 hover:border-rose-500/40"
-          title="Authenticate with Fingerprint / FaceID"
-        >
-          <Fingerprint className={`w-6 h-6 ${isAuthenticatingBio ? 'animate-spin' : ''}`} />
-          <span className="text-[9px] mt-0.5 text-slate-400 font-mono">BIO</span>
-        </button>
+        {/* Empty left slot */}
+        <div className="w-18 h-18" />
 
         {/* 0 */}
         <button

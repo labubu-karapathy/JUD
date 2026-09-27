@@ -13,6 +13,13 @@ export interface CachedProfile {
   is_verified?: boolean
   report_count: number
   block_count: number
+  department?: string
+  grad_year?: number
+  is_approved?: boolean
+  approval_comment?: string
+  is_deactivated?: boolean
+  deactivation_reason?: string
+  active_chat_count?: number
   updated_at: string
 }
 
@@ -27,6 +34,9 @@ export interface LocalMessage {
   mediaType?: string // e.g. 'image/jpeg', 'image/png'
   status: MessageStatus
   timestamp: number
+  isDeleted?: boolean
+  isViewOnce?: boolean
+  viewOnceStatus?: 'unopened' | 'opened'
 }
 
 export class AppLocalDatabase extends Dexie {
@@ -73,6 +83,21 @@ export class AppLocalDatabase extends Dexie {
 
   async updateMessageStatus(id: string, status: MessageStatus): Promise<void> {
     await this.local_messages.update(id, { status })
+  }
+
+  async deleteMessageForEveryone(id: string): Promise<void> {
+    await this.local_messages.update(id, {
+      text: '🚫 This message was deleted',
+      mediaBlob: undefined,
+      isDeleted: true,
+    })
+  }
+
+  async markViewOnceOpened(id: string): Promise<void> {
+    await this.local_messages.update(id, {
+      mediaBlob: undefined,
+      viewOnceStatus: 'opened',
+    })
   }
 
   async markMessagesDelivered(matchId: string, recipientId: string): Promise<void> {
