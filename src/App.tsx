@@ -381,9 +381,9 @@ export const App: React.FC = () => {
       onManualUnlock={() => setIsManualLocked(false)}
     >
       <div
-        className="max-w-md mx-auto min-h-screen bg-slate-950 text-white shadow-2xl relative flex flex-col overflow-hidden border-x border-slate-900/60 no-screen-capture"
+        className="max-w-md mx-auto h-screen h-[100dvh] max-h-[100dvh] bg-slate-950 text-white shadow-2xl relative flex flex-col overflow-hidden border-x border-slate-900/60 no-screen-capture"
         style={{
-          paddingTop: 'max(0.75rem, env(safe-area-inset-top, 0px))',
+          paddingTop: 'env(safe-area-inset-top, 0px)',
           paddingBottom: 'env(safe-area-inset-bottom, 0px)',
         }}
       >

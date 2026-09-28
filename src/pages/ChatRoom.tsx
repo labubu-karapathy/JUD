@@ -335,12 +335,47 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
   }
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    // Only Ctrl+Enter / Cmd+Enter sends from hardware keyboard (desktop convenience);
-    // Regular Enter on mobile virtual keyboard adds a newline as intended, since sending has a dedicated button.
+    // Only Ctrl+Enter / Cmd+Enter (physical hardware keyboard) sends message;
+    // Regular Enter (mobile keyboard return button) MUST ONLY insert newline (\n), never send.
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
       e.preventDefault()
       handleSendMessage()
+      return
     }
+
+    if (e.key === 'Enter' && !e.ctrlKey && !e.metaKey) {
+      setTimeout(() => {
+        if (textareaRef.current) {
+          textareaRef.current.style.height = 'auto'
+          textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 120)}px`
+        }
+      }, 0)
+    }
+  }
+
+  // Handle header back button (unwinds modals or navigates back to matches)
+  const handleHeaderBack = () => {
+    if (previewMedia || activeViewOnceMsgId) {
+      handleCloseLightbox()
+      return
+    }
+    if (isProfileModalOpen) {
+      setIsProfileModalOpen(false)
+      return
+    }
+    if (isReportModalOpen) {
+      setIsReportModalOpen(false)
+      return
+    }
+    if (isEmojiPickerOpen) {
+      setIsEmojiPickerOpen(false)
+      return
+    }
+    if (isMenuOpen) {
+      setIsMenuOpen(false)
+      return
+    }
+    onBack()
   }
 
   // Send text message (Optimistic local-first Dexie caching + P2P auto-delivery)
@@ -584,15 +619,16 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
   }
 
   return (
-    <div className="flex-1 flex flex-col h-full bg-slate-950 text-white select-none relative overflow-hidden no-screen-capture">
-      {/* --- HEADER --- */}
-      <div className="sticky top-0 z-30 bg-slate-900/95 backdrop-blur-xl border-b border-slate-800 px-3 py-2.5 flex items-center justify-between shadow-lg">
+    <div className="flex-1 flex flex-col h-full min-h-0 bg-slate-950 text-white select-none relative overflow-hidden no-screen-capture">
+      {/* --- FIXED HEADER (Pinned like WhatsApp) --- */}
+      <div className="shrink-0 z-30 bg-slate-900/95 backdrop-blur-xl border-b border-slate-800 px-3 py-2 flex items-center justify-between shadow-lg">
         {/* Left: Back & Partner Profile */}
-        <div className="flex items-center space-x-2.5 min-w-0">
+        <div className="flex items-center space-x-2 min-w-0">
           <button
             type="button"
-            onClick={onBack}
-            className="p-1 rounded-full text-slate-300 hover:text-white hover:bg-slate-800 transition-all"
+            onClick={handleHeaderBack}
+            aria-label="Back to matches"
+            className="p-2 -ml-1 rounded-full text-slate-300 hover:text-white hover:bg-slate-800 active:scale-90 transition-all touch-manipulation cursor-pointer flex items-center justify-center shrink-0"
           >
             <ArrowLeft className="w-5 h-5" />
           </button>
@@ -747,7 +783,7 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
       )}
 
       {/* --- P2P CHAT MESSAGES BODY --- */}
-      <div className="flex-1 overflow-y-auto px-3 py-4 space-y-3">
+      <div className="flex-1 overflow-y-auto overscroll-contain px-3 py-4 space-y-3 min-h-0">
         {/* Zero-Storage Encryption Notice */}
         <div className="mx-auto max-w-xs text-center py-1.5 px-3 bg-slate-900/60 rounded-xl border border-slate-800/80 text-[10px] text-slate-400 flex items-center justify-center space-x-1.5 shadow-sm">
           <ShieldCheck className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
@@ -879,11 +915,10 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
         </div>
       )}
 
-      {/* --- INPUT BAR (REMOVED IF USER IS DEACTIVATED) --- */}
+      {/* --- FIXED BOTTOM INPUT BAR (WHATSAPP STYLE) --- */}
       {!isPartnerDeactivated ? (
-        <form
-          onSubmit={handleSendMessage}
-          className="sticky bottom-0 bg-slate-900 border-t border-slate-800 px-3 pt-2 pb-3 flex items-end space-x-2 z-20 shadow-lg"
+        <div
+          className="shrink-0 bg-slate-900 border-t border-slate-800 px-3 pt-2 pb-3 flex items-end space-x-2 z-20 shadow-lg"
           style={{ paddingBottom: 'max(0.75rem, env(safe-area-inset-bottom, 0px) + 0.5rem)' }}
         >
           {/* Emoji Picker Toggle Button */}
@@ -970,6 +1005,7 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
               value={inputText}
               onChange={handleInputChange}
               onKeyDown={handleKeyDown}
+              enterKeyHint="enter"
               placeholder={
                 !isUserFemale && !matchState.has_female_initiated
                   ? 'Waiting for her to initiate...'
@@ -985,18 +1021,20 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
             />
           </div>
 
-          {/* Send Button */}
+          {/* Dedicated Send Button (Only tapping this button transmits the message) */}
           <button
-            type="submit"
+            type="button"
+            onClick={() => handleSendMessage()}
             disabled={
               !inputText.trim() ||
               (!isUserFemale && !matchState.has_female_initiated)
             }
-            className="p-2.5 rounded-full bg-rose-600 hover:bg-rose-500 disabled:opacity-40 text-white transition-all shadow-md shadow-rose-600/30 active:scale-95 mb-0.5 shrink-0"
+            aria-label="Send message"
+            className="p-2.5 rounded-full bg-rose-600 hover:bg-rose-500 disabled:opacity-40 text-white transition-all shadow-md shadow-rose-600/30 active:scale-95 mb-0.5 shrink-0 flex items-center justify-center cursor-pointer"
           >
             <Send className="w-4 h-4" />
           </button>
-        </form>
+        </div>
       ) : null}
 
       {/* --- FULLSCREEN IMAGE LIGHTBOX PREVIEW (VIEW-ONCE PROTECTED) --- */}

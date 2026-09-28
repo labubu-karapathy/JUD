@@ -27,6 +27,7 @@ class BackButtonService {
   private lastBackTime = 0
   private onExitToastCallback: ((show: boolean) => void) | null = null
   private toastTimer: any = null
+  private isDispatching = false
 
   public init(onExitToast?: (show: boolean) => void) {
     if (onExitToast) {
@@ -36,6 +37,7 @@ class BackButtonService {
     if (this.isInitialized) return
     this.isInitialized = true
 
+    // 1. Capacitor native App plugin listener
     if (Capacitor.isNativePlatform()) {
       try {
         CapApp.addListener('backButton', async () => {
@@ -46,8 +48,18 @@ class BackButtonService {
       }
     }
 
-    // Support browser / PWA back button via popstate
+    // 2. Direct native Activity bridge event (nativeappback)
     if (typeof window !== 'undefined') {
+      window.addEventListener('nativeappback', async () => {
+        await this.dispatchBack()
+      })
+
+      // 3. Document backbutton event (Capacitor / Cordova standard)
+      document.addEventListener('backbutton', async () => {
+        await this.dispatchBack()
+      })
+
+      // 4. Browser history popstate
       window.addEventListener('popstate', async () => {
         await this.dispatchBack()
       })
@@ -80,11 +92,17 @@ class BackButtonService {
   }
 
   public async dispatchBack(): Promise<boolean> {
+    // 200ms debounce prevents simultaneous double triggers from native and document events
+    if (this.isDispatching) return true
+    this.isDispatching = true
+    setTimeout(() => {
+      this.isDispatching = false
+    }, 200)
+
     for (const entry of this.handlers) {
       try {
         const handled = await entry.handler()
         if (handled) {
-          // If handled, clear exit toast if it was visible
           if (this.onExitToastCallback) {
             this.onExitToastCallback(false)
           }

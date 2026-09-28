@@ -5,7 +5,9 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.net.Uri;
 import android.os.Bundle;
+import android.view.KeyEvent;
 import android.view.WindowManager;
+import androidx.activity.OnBackPressedCallback;
 import androidx.core.content.FileProvider;
 import com.getcapacitor.BridgeActivity;
 import com.getcapacitor.JSObject;
@@ -226,5 +228,29 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(OtaUpdaterPlugin.class);
         super.onCreate(savedInstanceState);
         getWindow().setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE);
+
+        // Native Android Navigation Bar & Gesture Back Interceptor
+        getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
+            @Override
+            public void handleOnBackPressed() {
+                dispatchNativeBackEvent();
+            }
+        });
+    }
+
+    @Override
+    public boolean onKeyDown(int keyCode, KeyEvent event) {
+        if (keyCode == KeyEvent.KEYCODE_BACK) {
+            dispatchNativeBackEvent();
+            return true;
+        }
+        return super.onKeyDown(keyCode, event);
+    }
+
+    private void dispatchNativeBackEvent() {
+        if (this.bridge != null) {
+            this.bridge.triggerJSEvent("backbutton", "document");
+            this.bridge.eval("window.dispatchEvent(new CustomEvent('nativeappback'));", value -> {});
+        }
     }
 }
