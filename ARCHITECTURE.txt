@@ -1,0 +1,221 @@
+================================================================================
+JADAVPUR LOVE BIRDS (JLB / JUD) — ARCHITECTURAL BLUEPRINT & ISSUE AUDIT FILE
+Target: Technical Architecture Review, Security Verification & AI Peer-Auditing
+Date: 2026-09-28
+================================================================================
+
+--------------------------------------------------------------------------------
+1. EXECUTIVE SUMMARY & PLATFORM OBJECTIVE
+--------------------------------------------------------------------------------
+Jadavpur Love Birds (JLB / JUD) is an ultra-private, closed-loop campus matchmaking
+and communication network built exclusively for Jadavpur University students
+(covering 29 engineering, arts, and science departments; graduation classes 2024-2029).
+
+Unlike traditional dating platforms (Tinder, Bumble), JLB enforces a strict
+ZERO-KNOWLEDGE and ZERO-RETENTION architectural standard:
+- No private chats, photos, videos, or audio notes are stored on a central server.
+- Real-time chatting uses direct peer-to-peer (P2P) WebRTC DataChannels.
+- Asynchronous offline messaging uses a temporary, encrypted, store-and-drain
+  GitHub repository relay where messages are encrypted using AES-GCM-256 and
+  atomically deleted the moment the recipient retrieves them.
+- User identity is verified via campus Library Card Hashes and academic departments,
+  supervised by an offline/desktop administrator with FIDO2/WebAuthn passkeys.
+
+--------------------------------------------------------------------------------
+2. COMPREHENSIVE COMPONENT ARCHITECTURE
+--------------------------------------------------------------------------------
+
+A. Client Layer (Mobile & Web)
+   - Framework: React 18, TypeScript, Tailwind CSS, Vite.
+   - Mobile Runtime: Apache Cordova / Capacitor 8 (Android WebView container).
+   - Local Database: Dexie.js (IndexedDB wrapper) storing database 'JUDAppLocalDB'.
+     * Stores: local_messages, matches, cached_profiles, pending_queue, blocked_users.
+   - Dynamic Age Auto-Increment: CurrentAge = BaseAge + (CurrentYear - RegistrationYear).
+   - Security: Screen-capture blocking (@capacitor-community/privacy-screen),
+     6-digit App PIN security lock, biometric WebAuthn excised from Android WebView
+     due to standard WebView FIDO2 unreliability.
+
+B. Discovery & Metadata Layer (Supabase Cloud)
+   - PostgreSQL 15 + Realtime Signaler.
+   - Roles:
+     1. Profile directory (Name, Department, Grad Year, Library Card Hash, Insta).
+     2. Match signaling & female-first DM initiation gate.
+     3. Global announcements & account deactivation notifications.
+     4. Admin hardware passkey registry (public.admin_passkeys).
+   - Zero-Retention: No message tables exist on Supabase.
+
+C. Messaging Engine Tier 1: WebRTC P2P Mesh (Online State)
+   - Protocols: WebRTC DataChannel (SCTP over DTLS 1.3).
+   - Unlimited active chats: Zero server bandwidth load; signaling occurs via
+     Supabase Realtime channels (`matches:{matchId}`).
+   - Features: Real-time typing indicators, view-once photos, delivered/read receipts.
+
+D. Messaging Engine Tier 2: Encrypted Offline Storage Relay (Offline State)
+   - Target Repo: GitHub private repo `labubu-karapathy/backend`.
+   - Workflow when Recipient is Offline:
+     1. Sender encrypts payload with AES-GCM (256-bit key = SHA256("jlb_match_aes_" + matchId)).
+     2. Large media blobs (images/videos) are STRIPPED and kept locally on sender device.
+     3. Recipient ID is hashed: SHA-256(recipient_id).
+     4. Encrypted JSON committed to GitHub API:
+        `inbox/{sha256(recipient_id)}/{msg_id}.json`
+     5. Recipient logs in, fetches inbox, decrypts into local IndexedDB, and issues
+        an atomic HTTP DELETE to purge the message file from GitHub permanently.
+     6. Graduation cleanup: Tagged with graduation year; alumni chats are auto-dropped.
+
+E. Administrative Control Station (Desktop Suite)
+   - Standalone Python PySide6 GUI (`admin_desktop/admin_station.py`).
+   - Direct PostgreSQL connection pool via psycopg2 with SSL.
+   - Port 8089 local WebAuthn server (`admin_desktop/auth_server.py`) for physical
+     FIDO2 passkey (YubiKey / Windows Hello / Smartphone Bluetooth) authentication.
+   - Capabilities: Review pending student verification queue, validate Library Card
+     hashes against official university rosters, approve accounts, trigger instant
+     campus deactivations with mandatory audit explanations.
+
+--------------------------------------------------------------------------------
+3. THE AUTO-UPDATE & CODE SYNC SYSTEM (DETAILED DEEP-DIVE & CRITICAL ISSUES)
+--------------------------------------------------------------------------------
+
+The primary challenge is distributing application updates to campus Android users
+without relying on the Google Play Store, while ensuring that local IndexedDB chat
+history is NEVER wiped during updates.
+
+A. The Intended Flow:
+   1. Developer makes changes on laptop, compiles/bundles, and pushes to GitHub:
+      Repository: `https://github.com/labubu-karapathy/JUD` (branch: `main`).
+   2. Manifest file at repository root: `release-manifest.json`:
+      ```json
+      {
+        "version": "2.4.2",
+        "build_hash": "jlb-build-2026-09-28-v2.4.2",
+        "commit_message": "Release v2.4.2: ...",
+        "released_at": "2026-09-28T19:15:00.000Z",
+        "apk_url": "https://raw.githubusercontent.com/labubu-karapathy/JUD/main/JadavpurLoveBirds.apk"
+      }
+      ```
+   3. Mobile student apps run `checkGitHubRepoUpdate()` on launch and periodically.
+   4. The client fetches `release-manifest.json` (or latest commit on `main`) via GitHub API.
+   5. If remote `build_hash !== localStorage.getItem('jlb_local_build_hash')`, an update
+      event is triggered.
+
+B. The Core Architectural Issues & Limitations with Auto-Updating on Android:
+
+   [ISSUE 1: The Android WebView Read-Only Boundary]
+   - In Capacitor/Cordova, the Android APK serves HTML, CSS, and JS from the
+     packaged asset bundle (`android_asset/public/index.html` or `capacitor://localhost/`).
+   - Calling `window.location.reload()` simply reloads the *static assets bundled
+     inside the installed APK*.
+   - Pushing new TypeScript/React code to GitHub DOES NOT automatically alter the
+     files inside the phone's compiled APK.
+   - Therefore, a simple `reload()` resulted in a cosmetic update notification without
+     actually updating the running JavaScript code on Android!
+
+   [ISSUE 2: The Two Viable Mitigation Strategies & Trade-offs]
+   - Approach 1: In-App 1-Tap APK Download & Install
+     * The app detects the new version from `release-manifest.json`.
+     * The app displays a banner: "Campus Update v2.4.2 Available [Update APK]".
+     * Clicking triggers download of `JadavpurLoveBirds.apk` from GitHub raw URL.
+     * Android downloads it and launches the package installer prompt.
+     * PROS: 100% reliable, updates native code, plugins, and web code; preserves IndexedDB.
+     * CONS: Requires user tap and Android "Install Unknown Apps" permission prompt.
+
+   - Approach 2: Live Hot-Code Push / Dynamic Script Injection
+     * The app downloads the updated `dist/assets/index-[hash].js` and CSS from GitHub.
+     * Saves code into IndexedDB / localStorage.
+     * `index.html` contains a bootstrapper script that checks for a cached bundle and
+       injects `<script>` or executes `eval()` / `new Function()` with the new bundle.
+     * PROS: Zero user installation prompts; transparent background updates.
+     * CONS: CSP (Content Security Policy) restrictions; cannot update native Android
+       code or Capacitor plugins; potential risk of bricking app if bad JS is cached.
+
+   [ISSUE 3: GitHub API Rate Limiting & Auth Token Exposure]
+   - The app currently queries `https://api.github.com/repos/labubu-karapathy/JUD/...`
+   - Unauthenticated GitHub API calls are strictly limited to 60 requests/hour per IP.
+     With 500+ campus students on university Wi-Fi (shared NAT IP), unauthenticated
+     calls will instantly trigger HTTP 403 Rate Limit Exceeded!
+   - To bypass this, an obfuscated GitHub Personal Access Token (PAT) was embedded
+     via XOR byte masking (`_OBF_BYTES`).
+   - RISK: Even with XOR obfuscation, client-side tokens can be extracted by reverse-
+     engineering the APK (decompiling with jadx/apktool). If the PAT has broad repo
+     permissions, an attacker could tamper with the repo or push malicious updates.
+
+--------------------------------------------------------------------------------
+4. DATABASE SCHEMAS & ACCESS POLICIES (SUPABASE)
+--------------------------------------------------------------------------------
+
+- `public.profiles`:
+  Columns: id (UUID PK), full_name, gender, target_gender, age, bio, insta_handle,
+           library_card_hash, photo_urls, is_approved, is_deactivated,
+           approval_comment, deactivation_reason, department, grad_year,
+           report_count, block_count, active_chat_count, created_at, updated_at.
+  RLS: Select open to campus if approved & not deactivated. Updates restricted to owner.
+
+- `public.admin_passkeys`:
+  Columns: id, credential_id (TEXT UNIQUE), public_key, counter, device_label, created_at, username.
+  RLS: Admin FIDO2 passkey store.
+
+- `public.matches`:
+  Columns: id, female_id, male_id, has_female_initiated, media_allowed, matched_at.
+  RLS: Only female_id and male_id can select. Only female_id can set has_female_initiated/media_allowed.
+
+- `public.chat_requests`:
+  Columns: id, sender_id, receiver_id, status ('pending'|'accepted'|'rejected'), created_at.
+
+- `public.blocks` & `public.reports`:
+  Tables with atomic trigger functions updating block_count and report_count.
+
+- `public.global_announcements`:
+  Columns: id, content, type ('admin_broadcast'|'user_deactivation'|'system'), created_at.
+
+--------------------------------------------------------------------------------
+5. SECURITY & ZERO-KNOWLEDGE AUDIT CHECKPOINTS
+--------------------------------------------------------------------------------
+
+1. Private Message Storage:
+   - Does any chat message ever touch Supabase? -> NO.
+   - When offline, where does it go? -> GitHub `labubu-karapathy/backend` in an
+     AES-GCM-256 encrypted JSON file under SHA-256(recipient_id) folder.
+   - When is it deleted? -> Immediately upon recipient draining their inbox.
+   - Are photos/videos sent to GitHub? -> NO. Media blobs are strictly filtered out
+     and stored only on device IndexedDB.
+
+2. Identity Privacy:
+   - Real names are visible only on approved match discovery.
+   - Passcodes (6-digit PIN) are hashed with SHA-256 and salt for local unlock.
+   - Library card numbers are stored as raw/hashes and validated against 29 Jadavpur depts.
+
+--------------------------------------------------------------------------------
+6. SPECIFIC QUESTIONS & ITEMS FOR PEER AI VERIFICATION
+--------------------------------------------------------------------------------
+
+When reviewing this architecture with another AI, present these specific evaluation questions:
+
+Q1: [Auto-Update Strategy for Capacitor]
+    Between (A) Direct 1-tap APK download from GitHub raw releases versus (B) Dynamic
+    JavaScript bundle caching and execution via IndexedDB, which architecture is
+    recommended for a university sideloaded app? How can we prevent APK reverse-
+    engineering attacks if dynamic JS execution (eval/script injection) is used?
+
+Q2: [GitHub API Rate-Limits on Campus Wi-Fi]
+    With 500+ students sharing Jadavpur University campus Wi-Fi (shared public NAT IP),
+    how can we eliminate the 60 req/hr GitHub rate limit without embedding a sensitive
+    Personal Access Token (PAT) inside the client binary?
+    (e.g., using GitHub Pages raw static CDN endpoints `raw.githubusercontent.com`
+    which do not consume API rate limits and require no token?)
+
+Q3: [Ephemeral Store-and-Drain Offline Message Queue]
+    Is using a private GitHub repository (`labubu-karapathy/backend`) as an offline
+    encrypted queue scalable for 500+ users?
+    What happens if multiple messages arrive for the same user concurrently?
+    (Currently saved as `inbox/{recipientHash}/{msgId}.json` to avoid git merge conflicts).
+    Is there a risk of git commit history bloat, and should the repo be shallow or
+    pruned periodically via a GitHub Actions cron job?
+
+Q4: [WebRTC NAT / Firewall Traversal on Campus Networks]
+    University Wi-Fi networks often use Symmetric NAT or block UDP ports.
+    If STUN fails to establish a direct P2P connection between two campus devices,
+    should an open-source TURN relay (e.g., Coturn or Metered free tier) be integrated
+    to ensure 100% P2P connection reliability without storing messages?
+
+================================================================================
+END OF ARCHITECTURE SPECIFICATION
+================================================================================
