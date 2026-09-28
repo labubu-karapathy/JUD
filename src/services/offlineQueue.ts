@@ -16,7 +16,7 @@ import { db, type LocalMessage } from '../db'
 // Default Cloudflare Worker relay endpoint (can be overridden via VITE_RELAY_WORKER_URL)
 const RELAY_WORKER_URL = (
   (typeof import.meta !== 'undefined' && import.meta.env?.VITE_RELAY_WORKER_URL) ||
-  'https://jlb-offline-relay.workers.dev'
+  'https://jlb-offline-relay.jlb-relay.workers.dev'
 ).replace(/\/+$/, '')
 
 // --- CRYPTOGRAPHY PRIMITIVES (Web Crypto API: AES-GCM-256 + SHA-256) ---
