@@ -1,16 +1,28 @@
 package com.antigravity.datingapp;
 
+import android.app.Activity;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.net.Uri;
 import android.os.Bundle;
 import android.view.WindowManager;
 import androidx.core.content.FileProvider;
 import com.getcapacitor.BridgeActivity;
+import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
+
+import java.io.BufferedInputStream;
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
 
 @CapacitorPlugin(name = "AppInstaller")
 class AppInstallerPlugin extends Plugin {
@@ -51,10 +63,167 @@ class AppInstallerPlugin extends Plugin {
     }
 }
 
+@CapacitorPlugin(name = "OtaUpdater")
+class OtaUpdaterPlugin extends Plugin {
+    public static final String PREFS_NAME = "CapWebViewSettings";
+    public static final String PREF_SERVER_PATH = "serverBasePath";
+    public static final String PREF_OTA_VERSION = "ota_version";
+
+    @PluginMethod
+    public void getActiveVersion(PluginCall call) {
+        SharedPreferences prefs = getContext().getSharedPreferences(PREFS_NAME, Activity.MODE_PRIVATE);
+        String version = prefs.getString(PREF_OTA_VERSION, "bundled");
+        String path = prefs.getString(PREF_SERVER_PATH, "");
+        JSObject ret = new JSObject();
+        ret.put("version", version);
+        ret.put("path", path);
+        call.resolve(ret);
+    }
+
+    @PluginMethod
+    public void downloadAndApply(PluginCall call) {
+        String urlString = call.getString("url");
+        String version = call.getString("version");
+
+        if (urlString == null || urlString.trim().isEmpty()) {
+            call.reject("url is required");
+            return;
+        }
+
+        new Thread(() -> {
+            File tempZip = null;
+            try {
+                File otaBaseDir = new File(getContext().getFilesDir(), "ota_updates");
+                if (!otaBaseDir.exists()) otaBaseDir.mkdirs();
+
+                tempZip = new File(otaBaseDir, "temp_" + System.currentTimeMillis() + ".zip");
+                URL url = new URL(urlString);
+                HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                conn.setConnectTimeout(15000);
+                conn.setReadTimeout(30000);
+                conn.setInstanceFollowRedirects(true);
+                conn.connect();
+
+                if (conn.getResponseCode() != HttpURLConnection.HTTP_OK) {
+                    throw new Exception("HTTP error " + conn.getResponseCode() + ": " + conn.getResponseMessage());
+                }
+
+                InputStream in = new BufferedInputStream(conn.getInputStream());
+                FileOutputStream out = new FileOutputStream(tempZip);
+                byte[] buffer = new byte[8192];
+                int count;
+                while ((count = in.read(buffer)) != -1) {
+                    out.write(buffer, 0, count);
+                }
+                out.flush();
+                out.close();
+                in.close();
+
+                File targetDir = new File(otaBaseDir, version != null ? version : ("v_" + System.currentTimeMillis()));
+                if (targetDir.exists()) {
+                    deleteRecursive(targetDir);
+                }
+                targetDir.mkdirs();
+
+                unzip(tempZip, targetDir);
+
+                File indexFile = new File(targetDir, "index.html");
+                if (!indexFile.exists()) {
+                    File nestedDist = new File(targetDir, "dist");
+                    if (nestedDist.exists() && new File(nestedDist, "index.html").exists()) {
+                        targetDir = nestedDist;
+                    } else {
+                        throw new Exception("Invalid web bundle: index.html not found in archive root");
+                    }
+                }
+
+                final File finalTargetDir = targetDir;
+                final String finalVersion = version != null ? version : "custom";
+
+                SharedPreferences prefs = getContext().getSharedPreferences(PREFS_NAME, Activity.MODE_PRIVATE);
+                prefs.edit()
+                    .putString(PREF_SERVER_PATH, finalTargetDir.getAbsolutePath())
+                    .putString(PREF_OTA_VERSION, finalVersion)
+                    .apply();
+
+                getActivity().runOnUiThread(() -> {
+                    getBridge().setServerBasePath(finalTargetDir.getAbsolutePath());
+                    JSObject ret = new JSObject();
+                    ret.put("success", true);
+                    ret.put("version", finalVersion);
+                    call.resolve(ret);
+                });
+
+            } catch (Exception e) {
+                call.reject("OTA Update failed: " + e.getMessage(), e);
+            } finally {
+                if (tempZip != null && tempZip.exists()) {
+                    tempZip.delete();
+                }
+            }
+        }).start();
+    }
+
+    @PluginMethod
+    public void resetToDefault(PluginCall call) {
+        SharedPreferences prefs = getContext().getSharedPreferences(PREFS_NAME, Activity.MODE_PRIVATE);
+        prefs.edit().remove(PREF_SERVER_PATH).remove(PREF_OTA_VERSION).apply();
+        getActivity().runOnUiThread(() -> {
+            getBridge().setServerAssetPath("public");
+            call.resolve();
+        });
+    }
+
+    private void unzip(File zipFile, File targetDirectory) throws Exception {
+        ZipInputStream zis = new ZipInputStream(new BufferedInputStream(new FileInputStream(zipFile)));
+        ZipEntry ze;
+        while ((ze = zis.getNextEntry()) != null) {
+            File file = new File(targetDirectory, ze.getName());
+            String canonicalDestPath = targetDirectory.getCanonicalPath();
+            String canonicalFilePath = file.getCanonicalPath();
+            if (!canonicalFilePath.startsWith(canonicalDestPath + File.separator)) {
+                throw new SecurityException("Zip entry is outside target dir: " + ze.getName());
+            }
+
+            if (ze.isDirectory()) {
+                file.mkdirs();
+            } else {
+                File parent = file.getParentFile();
+                if (parent != null && !parent.exists()) {
+                    parent.mkdirs();
+                }
+                FileOutputStream fos = new FileOutputStream(file);
+                byte[] buffer = new byte[8192];
+                int count;
+                while ((count = zis.read(buffer)) != -1) {
+                    fos.write(buffer, 0, count);
+                }
+                fos.flush();
+                fos.close();
+            }
+            zis.closeEntry();
+        }
+        zis.close();
+    }
+
+    private void deleteRecursive(File fileOrDirectory) {
+        if (fileOrDirectory.isDirectory()) {
+            File[] children = fileOrDirectory.listFiles();
+            if (children != null) {
+                for (File child : children) {
+                    deleteRecursive(child);
+                }
+            }
+        }
+        fileOrDirectory.delete();
+    }
+}
+
 public class MainActivity extends BridgeActivity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
         registerPlugin(AppInstallerPlugin.class);
+        registerPlugin(OtaUpdaterPlugin.class);
         super.onCreate(savedInstanceState);
         getWindow().setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE);
     }

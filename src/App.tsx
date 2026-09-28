@@ -11,7 +11,7 @@ import { InstallPwaBanner } from './components/InstallPwaBanner'
 import { api, type Profile, type MatchRecord, type GlobalAnnouncement } from './services/supabase'
 import { db } from './db'
 import { AlertOctagon, Radio, X, Sparkles, Download } from 'lucide-react'
-import { checkForUpdate, downloadAndInstallUpdate, type ReleaseManifest } from './services/updateService'
+import { checkForUpdate, downloadAndInstallUpdate, applyOtaUpdate, type ReleaseManifest } from './services/updateService'
 import { drainOfflineMessages } from './services/offlineQueue'
 import { GlobalCampusChatDrawer } from './components/GlobalCampusChatDrawer'
 
@@ -24,6 +24,7 @@ export const App: React.FC = () => {
   const [unreadCount, setUnreadCount] = useState<number>(0)
   const [activeAnnouncement, setActiveAnnouncement] = useState<GlobalAnnouncement | null>(null)
   const [updateManifest, setUpdateManifest] = useState<ReleaseManifest | null>(null)
+  const [isOtaAvailable, setIsOtaAvailable] = useState<boolean>(false)
   const [isUpdating, setIsUpdating] = useState<boolean>(false)
   const [isGlobalChatOpen, setIsGlobalChatOpen] = useState<boolean>(false)
 
@@ -132,6 +133,7 @@ export const App: React.FC = () => {
         const result = await checkForUpdate()
         if (result.hasUpdate && result.remoteManifest) {
           setUpdateManifest(result.remoteManifest)
+          setIsOtaAvailable(result.isOtaAvailable)
         }
       } catch (err) {
         console.warn('[CDN Update Check Notice]:', err)
@@ -326,7 +328,6 @@ export const App: React.FC = () => {
           paddingBottom: 'env(safe-area-inset-bottom, 0px)',
         }}
       >
-        {/* OTA Auto-Update Live Synchronization Banner (Authenticated Users Only) */}
         {/* Zero-Cost Auto-Update Live CDN Banner (Authenticated Users Only) */}
         {currentProfile && updateManifest && (
           <div className="bg-emerald-950/95 border-b border-emerald-500/50 px-3.5 py-2.5 flex items-center justify-between text-xs text-emerald-200 z-50 shadow-lg backdrop-blur-md animate-in slide-in-from-top duration-300">
@@ -334,9 +335,9 @@ export const App: React.FC = () => {
               <div className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping shrink-0" />
               <div className="truncate">
                 <div className="font-bold text-[11px] text-emerald-300 flex items-center gap-1.5">
-                  <span>🚀 Campus Update Available (v{updateManifest.version})</span>
-                  <span className="text-[9px] bg-emerald-900/80 px-1.5 py-0.5 rounded text-emerald-400 border border-emerald-700/60 uppercase">
-                    GitHub CDN
+                  <span>{isOtaAvailable ? '⚡ Instant Update Ready' : '🚀 Campus Update Available'} (v{updateManifest.version})</span>
+                  <span className="text-[9px] bg-emerald-900/80 px-1.5 py-0.5 rounded text-emerald-400 border border-emerald-700/60 uppercase font-semibold">
+                    {isOtaAvailable ? 'Instant OTA' : 'GitHub CDN'}
                   </span>
                 </div>
                 <p className="text-[10px] text-emerald-400/90 truncate">
@@ -350,7 +351,11 @@ export const App: React.FC = () => {
                 onClick={async () => {
                   try {
                     setIsUpdating(true)
-                    await downloadAndInstallUpdate(updateManifest.downloadUrl)
+                    if (isOtaAvailable && updateManifest.webBundleUrl) {
+                      await applyOtaUpdate(updateManifest.webBundleUrl, updateManifest.version)
+                    } else {
+                      await downloadAndInstallUpdate(updateManifest.downloadUrl)
+                    }
                   } catch (e: any) {
                     console.warn('Install update error:', e)
                   } finally {
@@ -361,7 +366,7 @@ export const App: React.FC = () => {
                 className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold text-[10px] rounded-lg shadow transition-colors flex items-center gap-1"
               >
                 <Download className="w-3 h-3" />
-                <span>{isUpdating ? 'Downloading...' : 'Update APK'}</span>
+                <span>{isUpdating ? (isOtaAvailable ? 'Updating...' : 'Downloading...') : (isOtaAvailable ? 'Update Now' : 'Update APK')}</span>
               </button>
               <button
                 type="button"

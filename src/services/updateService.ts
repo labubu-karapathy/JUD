@@ -3,27 +3,23 @@
  * JADAVPUR LOVE BIRDS (JLB) — ZERO-COST FLEET AUTO-UPDATER SERVICE
  * ==============================================================================
  * Architecture & Design Standards:
- * 1. ZERO-COST & NO RATE LIMITS:
- *    Fetches release manifests directly from GitHub raw CDN / Releases:
- *    https://raw.githubusercontent.com/labubu-karapathy/JUD/main/release-manifest.json
- *    Eliminates all calls to api.github.com and strips any client-side tokens.
+ * 1. ZERO-COST OVER-THE-AIR (OTA) DYNAMIC WEB BUNDLE UPDATES:
+ *    - 99% of app updates are web code changes (HTML/CSS/JS in dist/).
+ *    - Instead of repeatedly downloading a 16MB APK and prompting the user with
+ *      the Android package installer, the app downloads a ~1MB web-dist.zip
+ *      from GitHub CDN in under 2 seconds.
+ *    - Unzips into internal app storage and updates Capacitor's serverBasePath.
+ *    - Instant seamless reload without touching Android package installer or losing
+ *      any IndexedDB ('JUDAppLocalDB') data.
  *
- * 2. NATIVE ANDROID PACKAGE INSTALLATION VIA FILEPROVIDER:
- *    Downloads the compiled APK into the application's external cache directory
- *    using @capacitor/filesystem, then invokes Android's native package installer:
- *    - Action: Intent.ACTION_VIEW
- *    - Data: Content URI from FileProvider (com.antigravity.datingapp.fileprovider)
- *    - Type: application/vnd.android.package-archive
- *    - Flags: FLAG_GRANT_READ_URI_PERMISSION | FLAG_ACTIVITY_NEW_TASK
+ * 2. NATIVE ANDROID PACKAGE UPGRADES (FALLBACK FOR NATIVE CHANGES):
+ *    - When an update actually requires native Android changes (new permissions,
+ *      native plugins in AndroidManifest.xml), minNativeVersionCode triggers
+ *      the native APK download and Android FileProvider installer.
  *
- * 3. 100% INDEXEDDB SANDBOX RETENTION:
- *    Updating the APK in-place preserves the internal Android app sandbox.
- *    Dexie IndexedDB ('JUDAppLocalDB') and local credentials remain untouched.
- *    IMPORTANT: Debug and release builds must use the same signing keystore
- *    (e.g., android/app/debug.keystore) so Android permits in-place package upgrades.
- *
- * 4. ZERO SCRIPT INJECTION:
- *    No eval(), dynamic <script> tag injection, or arbitrary remote code execution.
+ * 3. 100% FREE TIER / ZERO SERVER STORAGE:
+ *    - All assets are served via raw.githubusercontent.com CDN (unlimited bandwidth).
+ *    - Zero tokens, zero API rate-limits, completely zero-cost.
  * ==============================================================================
  */
 
@@ -31,21 +27,24 @@ import { Capacitor, registerPlugin } from '@capacitor/core'
 import { App } from '@capacitor/app'
 import { Filesystem, Directory } from '@capacitor/filesystem'
 
-export const CURRENT_APP_VERSION = '2.4.2'
-export const CURRENT_BUILD_HASH = 'jlb-build-2026-09-28-v2.4.2'
+export const CURRENT_APP_VERSION = '2.4.4'
+export const CURRENT_BUILD_HASH = 'jlb-build-2026-09-28-v2.4.4'
 
 export interface ReleaseManifest {
   version: string
   versionCode: number
   releaseDate: string
   mandatory: boolean
-  downloadUrl: string
+  downloadUrl: string // APK download URL
+  webBundleUrl?: string // OTA zip download URL
+  minNativeVersionCode?: number // Minimum native binary required for OTA
   commit_message?: string
   build_hash?: string
 }
 
 export interface UpdateCheckResult {
   hasUpdate: boolean
+  isOtaAvailable: boolean
   currentVersion: string
   currentVersionCode: number
   remoteManifest: ReleaseManifest | null
@@ -57,7 +56,14 @@ interface AppInstallerPlugin {
   installApk(options: { filePath: string }): Promise<void>
 }
 
+interface OtaUpdaterPlugin {
+  downloadAndApply(options: { url: string; version: string }): Promise<{ success: boolean; version: string }>
+  getActiveVersion(): Promise<{ version: string; path: string }>
+  resetToDefault(): Promise<void>
+}
+
 const AppInstaller = registerPlugin<AppInstallerPlugin>('AppInstaller')
+const OtaUpdater = registerPlugin<OtaUpdaterPlugin>('OtaUpdater')
 
 const MANIFEST_CDN_URL = 'https://raw.githubusercontent.com/labubu-karapathy/JUD/main/release-manifest.json'
 
@@ -67,16 +73,22 @@ const MANIFEST_CDN_URL = 'https://raw.githubusercontent.com/labubu-karapathy/JUD
  */
 export async function checkForUpdate(): Promise<UpdateCheckResult> {
   try {
-    let currentVersion = '2.4.2'
-    let currentVersionCode = 20402
+    let currentVersion = CURRENT_APP_VERSION
+    let currentVersionCode = 20404
 
     if (Capacitor.isNativePlatform()) {
       try {
         const appInfo = await App.getInfo()
         currentVersion = appInfo.version || currentVersion
         currentVersionCode = parseInt(appInfo.build, 10) || currentVersionCode
+
+        // Check if there is an active OTA version running
+        const otaInfo = await OtaUpdater.getActiveVersion()
+        if (otaInfo && otaInfo.version && otaInfo.version !== 'bundled') {
+          currentVersion = otaInfo.version
+        }
       } catch (err) {
-        console.warn('[UpdateService] Could not read native app info:', err)
+        console.warn('[UpdateService] Could not read native app/OTA info:', err)
       }
     }
 
@@ -89,20 +101,25 @@ export async function checkForUpdate(): Promise<UpdateCheckResult> {
 
     if (!response.ok) {
       console.warn(`[UpdateService] Manifest fetch returned HTTP ${response.status}`)
-      return { hasUpdate: false, currentVersion, currentVersionCode, remoteManifest: null }
+      return { hasUpdate: false, isOtaAvailable: false, currentVersion, currentVersionCode, remoteManifest: null }
     }
 
     const manifest: ReleaseManifest = await response.json()
     const remoteCode = manifest.versionCode || 0
 
-    // Compare version code
-    const hasUpdate = remoteCode > currentVersionCode || (
-      manifest.version !== currentVersion &&
-      manifest.build_hash !== localStorage.getItem('jlb_local_build_hash')
-    )
+    // Check if OTA is possible:
+    // Requires webBundleUrl and installed native binary version >= minNativeVersionCode
+    const minNative = manifest.minNativeVersionCode || 0
+    const isOtaAvailable = Boolean(manifest.webBundleUrl && currentVersionCode >= minNative)
+
+    // Check if an update is available
+    const hasUpdate = isOtaAvailable
+      ? (manifest.version !== currentVersion && manifest.build_hash !== localStorage.getItem('jlb_local_build_hash'))
+      : remoteCode > currentVersionCode
 
     return {
       hasUpdate,
+      isOtaAvailable,
       currentVersion,
       currentVersionCode,
       remoteManifest: manifest,
@@ -111,21 +128,41 @@ export async function checkForUpdate(): Promise<UpdateCheckResult> {
     console.warn('[UpdateService] Update check network error:', error)
     return {
       hasUpdate: false,
-      currentVersion: '2.4.2',
-      currentVersionCode: 20402,
+      isOtaAvailable: false,
+      currentVersion: CURRENT_APP_VERSION,
+      currentVersionCode: 20403,
       remoteManifest: null,
     }
   }
 }
 
 /**
+ * Downloads and applies a lightweight Over-The-Air (OTA) web bundle update.
+ * Unzips in app storage and reloads WebView instantly without Android installer prompts.
+ */
+export async function applyOtaUpdate(
+  webBundleUrl: string,
+  version: string
+): Promise<void> {
+  if (!Capacitor.isNativePlatform()) {
+    window.location.reload()
+    return
+  }
+
+  const result = await OtaUpdater.downloadAndApply({ url: webBundleUrl, version })
+  if (result.success) {
+    localStorage.setItem('jlb_local_build_hash', `jlb-ota-${version}`)
+  }
+}
+
+/**
  * Downloads the APK into the app's cache directory and triggers the Android FileProvider installer.
+ * (Used only when an update requires new native Java/permissions).
  */
 export async function downloadAndInstallUpdate(
   downloadUrl: string,
   onProgress?: DownloadProgressCallback
 ): Promise<void> {
-  // If running in browser or PWA mode, open the download URL in a new tab
   if (!Capacitor.isNativePlatform()) {
     window.open(downloadUrl, '_blank')
     return
@@ -136,7 +173,6 @@ export async function downloadAndInstallUpdate(
   try {
     onProgress?.(10)
 
-    // Option A: Use Filesystem.downloadFile if supported by native platform
     let apkNativePath = ''
     try {
       const downloadResult = await Filesystem.downloadFile({
@@ -148,7 +184,6 @@ export async function downloadAndInstallUpdate(
       apkNativePath = downloadResult.path || ''
       onProgress?.(80)
     } catch {
-      // Option B: Fallback to fetch + Blob write
       onProgress?.(25)
       const res = await fetch(downloadUrl)
       if (!res.ok) throw new Error(`APK download failed with status ${res.status}`)
@@ -166,7 +201,6 @@ export async function downloadAndInstallUpdate(
       onProgress?.(85)
     }
 
-    // Resolve native file URI if not absolute
     if (!apkNativePath.startsWith('file://') && !apkNativePath.startsWith('/')) {
       const uriResult = await Filesystem.getUri({
         path: fileName,
@@ -181,7 +215,6 @@ export async function downloadAndInstallUpdate(
     await AppInstaller.installApk({ filePath: apkNativePath })
   } catch (error: any) {
     console.error('[UpdateService] Download & install failed:', error)
-    // Fallback: Launch external browser to download directly
     window.open(downloadUrl, '_system')
     throw error
   }
