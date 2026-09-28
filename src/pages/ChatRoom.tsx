@@ -29,6 +29,7 @@ import { ReportModal } from '../components/ReportModal'
 import { RichEmojiPicker } from '../components/RichEmojiPicker'
 import { ProfileModal } from '../components/ProfileModal'
 import { drainOfflineMessages, pushOfflineEncryptedMessage } from '../services/offlineQueue'
+import { backButtonService } from '../services/backButtonService'
 
 /**
  * Client-Side Image Optimization Utility
@@ -264,6 +265,50 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
       engineRef.current.markAllUnreadAsRead()
     }
   }, [messages.length])
+
+  // Android Hardware / Gesture Back Button Interceptor
+  useEffect(() => {
+    const unregister = backButtonService.register('chatroom', 50, () => {
+      // 1. Close lightbox or view-once preview
+      if (previewMedia || activeViewOnceMsgId) {
+        handleCloseLightbox()
+        return true
+      }
+      // 2. Close partner profile modal
+      if (isProfileModalOpen) {
+        setIsProfileModalOpen(false)
+        return true
+      }
+      // 3. Close report modal
+      if (isReportModalOpen) {
+        setIsReportModalOpen(false)
+        return true
+      }
+      // 4. Close emoji picker
+      if (isEmojiPickerOpen) {
+        setIsEmojiPickerOpen(false)
+        return true
+      }
+      // 5. Close 3-dots menu
+      if (isMenuOpen) {
+        setIsMenuOpen(false)
+        return true
+      }
+      // 6. Otherwise: navigate back to matches list
+      onBack()
+      return true
+    })
+
+    return () => unregister()
+  }, [
+    previewMedia,
+    activeViewOnceMsgId,
+    isProfileModalOpen,
+    isReportModalOpen,
+    isEmojiPickerOpen,
+    isMenuOpen,
+    onBack,
+  ])
 
   // Female user toggles media sharing permission
   const handleToggleMediaPermission = async () => {

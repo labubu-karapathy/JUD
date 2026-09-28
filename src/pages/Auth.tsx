@@ -17,6 +17,7 @@ import { sha256, vibrateDevice } from '../utils/crypto'
 import { api, type Profile } from '../services/supabase'
 import { db } from '../db'
 import { JADAVPUR_DEPARTMENTS } from '../utils/departmentValidator'
+import { backButtonService } from '../services/backButtonService'
 
 interface AuthProps {
   onAuthSuccess: (profile: Profile) => void
@@ -69,6 +70,27 @@ export const Auth: React.FC<AuthProps> = ({ onAuthSuccess }) => {
       // Ignore parse errors
     }
   }, [])
+
+  // Android Hardware / Gesture Back Button Interceptor
+  useEffect(() => {
+    const unregister = backButtonService.register('auth_flow', 80, () => {
+      if (pendingApprovalProfile) {
+        setPendingApprovalProfile(null)
+        return true
+      }
+      if (useDifferentAccount) {
+        setUseDifferentAccount(false)
+        return true
+      }
+      if (authMode === 'signup' && savedProfile) {
+        setAuthMode('signin')
+        return true
+      }
+      return false
+    })
+
+    return () => unregister()
+  }, [pendingApprovalProfile, useDifferentAccount, authMode, savedProfile])
 
   // Handle Photo Upload (real student photo only, zero placeholders)
   const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {

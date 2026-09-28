@@ -1,12 +1,12 @@
 {
-  "version": "2.4.5",
+  "version": "2.4.6",
   "versionCode": 20404,
-  "releaseDate": "2026-09-29T00:53:00.000Z",
+  "releaseDate": "2026-09-29T02:15:00.000Z",
   "mandatory": false,
   "downloadUrl": "https://raw.githubusercontent.com/labubu-karapathy/JUD/main/JadavpurLoveBirds.apk",
   "webBundleUrl": "https://raw.githubusercontent.com/labubu-karapathy/JUD/main/web-dist.zip",
   "minNativeVersionCode": 20404,
-  "build_hash": "jlb-build-2026-09-29-v2.4.5",
-  "commit_message": "v2.4.5: Mobile keyboard Enter key inserts newline with auto-expanding chat input; sending reserved for dedicated Send button",
+  "build_hash": "jlb-build-2026-09-29-v2.4.6",
+  "commit_message": "v2.4.6: Full Android device hardware/gesture back button navigation across modals, drawers, chat, and tab history with double-tap exit hint",
   "apk_url": "https://raw.githubusercontent.com/labubu-karapathy/JUD/main/JadavpurLoveBirds.apk"
 }

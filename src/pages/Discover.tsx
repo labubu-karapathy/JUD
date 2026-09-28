@@ -18,6 +18,7 @@ import { ProfileCard } from '../components/ProfileCard'
 import { ReportModal } from '../components/ReportModal'
 import { api, type Profile, type ChatRequest } from '../services/supabase'
 import { db, type CachedProfile } from '../db'
+import { backButtonService } from '../services/backButtonService'
 
 interface DiscoverProps {
   currentProfile: Profile
@@ -42,6 +43,27 @@ export const Discover: React.FC<DiscoverProps> = ({
   const [isRequestsDrawerOpen, setIsRequestsDrawerOpen] = useState<boolean>(false)
 
   const isUserFemale = currentProfile.gender === 'female'
+
+  // Android Back Button Interceptor for Modals & Drawers
+  useEffect(() => {
+    const unregister = backButtonService.register('discover_modals', 90, () => {
+      if (matchCelebration) {
+        setMatchCelebration(null)
+        return true
+      }
+      if (reportingProfile) {
+        setReportingProfile(null)
+        return true
+      }
+      if (isRequestsDrawerOpen) {
+        setIsRequestsDrawerOpen(false)
+        return true
+      }
+      return false
+    })
+
+    return () => unregister()
+  }, [matchCelebration, reportingProfile, isRequestsDrawerOpen])
 
   // Load chat requests
   const loadChatRequests = useCallback(async () => {

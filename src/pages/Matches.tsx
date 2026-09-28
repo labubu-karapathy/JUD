@@ -11,6 +11,7 @@ import {
 import { api, type MatchRecord, type Profile } from '../services/supabase'
 import { db, type LocalMessage } from '../db'
 import { ProfileModal } from '../components/ProfileModal'
+import { backButtonService } from '../services/backButtonService'
 
 interface MatchesProps {
   currentProfile: Profile
@@ -29,6 +30,19 @@ export const Matches: React.FC<MatchesProps> = ({
   const [matches, setMatches] = useState<MatchWithLastMessage[]>([])
   const [isLoading, setIsLoading] = useState<boolean>(true)
   const [selectedPartner, setSelectedPartner] = useState<Profile | null>(null)
+
+  // Android Back Button Interceptor for Partner Profile Modal
+  useEffect(() => {
+    const unregister = backButtonService.register('matches_modals', 90, () => {
+      if (selectedPartner) {
+        setSelectedPartner(null)
+        return true
+      }
+      return false
+    })
+
+    return () => unregister()
+  }, [selectedPartner])
 
   const loadMatches = useCallback(async () => {
     setIsLoading(true)

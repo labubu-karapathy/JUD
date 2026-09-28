@@ -27,8 +27,8 @@ import { Capacitor, registerPlugin } from '@capacitor/core'
 import { App } from '@capacitor/app'
 import { Filesystem, Directory } from '@capacitor/filesystem'
 
-export const CURRENT_APP_VERSION = '2.4.5'
-export const CURRENT_BUILD_HASH = 'jlb-build-2026-09-29-v2.4.5'
+export const CURRENT_APP_VERSION = '2.4.6'
+export const CURRENT_BUILD_HASH = 'jlb-build-2026-09-29-v2.4.6'
 
 export interface ReleaseManifest {
   version: string

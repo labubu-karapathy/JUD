@@ -14,11 +14,14 @@ import { AlertOctagon, Radio, X, Sparkles, Download } from 'lucide-react'
 import { checkForUpdate, downloadAndInstallUpdate, applyOtaUpdate, type ReleaseManifest } from './services/updateService'
 import { drainOfflineMessages } from './services/offlineQueue'
 import { GlobalCampusChatDrawer } from './components/GlobalCampusChatDrawer'
+import { backButtonService } from './services/backButtonService'
 
 export const App: React.FC = () => {
   const [currentProfile, setCurrentProfile] = useState<Profile | null>(null)
   const [isLoadingAuth, setIsLoadingAuth] = useState<boolean>(true)
   const [activeTab, setActiveTab] = useState<NavTab>('discover')
+  const [tabHistory, setTabHistory] = useState<NavTab[]>(['discover'])
+  const [showExitToast, setShowExitToast] = useState<boolean>(false)
   const [activeChatMatch, setActiveChatMatch] = useState<MatchRecord | null>(null)
   const [isManualLocked, setIsManualLocked] = useState<boolean>(false)
   const [unreadCount, setUnreadCount] = useState<number>(0)
@@ -196,9 +199,64 @@ export const App: React.FC = () => {
     }
   }, [currentProfile?.id, updateUnreadBadge])
 
+  const handleNavigateTab = useCallback((tab: NavTab) => {
+    setActiveTab(tab)
+    setTabHistory((prev) => {
+      if (prev[prev.length - 1] === tab) return prev
+      return [...prev, tab]
+    })
+    updateUnreadBadge()
+  }, [updateUnreadBadge])
+
+  // Android Hardware / Gesture Back Button Global Orchestrator
+  useEffect(() => {
+    backButtonService.init((show) => setShowExitToast(show))
+
+    const unregister = backButtonService.register('app_navigation', 10, () => {
+      // 1. If Admin Route open: exit admin route
+      if (isAdminRoute) {
+        window.location.hash = ''
+        setIsAdminRoute(false)
+        return true
+      }
+      // 2. If Global Campus Chat drawer open: close it
+      if (isGlobalChatOpen) {
+        setIsGlobalChatOpen(false)
+        return true
+      }
+      // 3. If in Active Chat: exit chat to matches list
+      if (activeChatMatch !== null) {
+        setActiveChatMatch(null)
+        updateUnreadBadge()
+        return true
+      }
+      // 4. Tab navigation history (e.g. Profile -> Matches -> Discover)
+      if (tabHistory.length > 1) {
+        const newHistory = [...tabHistory]
+        newHistory.pop() // remove current tab
+        const previousTab = newHistory[newHistory.length - 1] || 'discover'
+        setTabHistory(newHistory)
+        setActiveTab(previousTab)
+        return true
+      }
+      // 5. If on another tab but history has only 1 element: return to 'discover'
+      if (activeTab !== 'discover') {
+        setActiveTab('discover')
+        setTabHistory(['discover'])
+        return true
+      }
+      // 6. At root of app: trigger double-tap exit toast!
+      backButtonService.handleRootExit()
+      return true
+    })
+
+    return () => unregister()
+  }, [isAdminRoute, isGlobalChatOpen, activeChatMatch, tabHistory, activeTab, updateUnreadBadge])
+
   const handleAuthSuccess = (profile: Profile) => {
     setCurrentProfile(profile)
     setActiveTab('discover')
+    setTabHistory(['discover'])
   }
 
   const handleLogout = () => {
@@ -209,6 +267,7 @@ export const App: React.FC = () => {
     setCurrentProfile(null)
     setActiveChatMatch(null)
     setActiveTab('discover')
+    setTabHistory(['discover'])
   }
 
   // --- ADMIN DESKTOP SUITE ROUTE ---
@@ -418,7 +477,7 @@ export const App: React.FC = () => {
             }}
             onUserBlocked={() => {
               setActiveChatMatch(null)
-              setActiveTab('discover')
+              handleNavigateTab('discover')
             }}
           />
         ) : (
@@ -426,7 +485,7 @@ export const App: React.FC = () => {
             {activeTab === 'discover' && (
               <Discover
                 currentProfile={currentProfile}
-                onNavigateToMatches={() => setActiveTab('matches')}
+                onNavigateToMatches={() => handleNavigateTab('matches')}
               />
             )}
 
@@ -448,13 +507,18 @@ export const App: React.FC = () => {
             {/* Persistent Mobile Bottom Navigation */}
             <BottomNav
               currentTab={activeTab}
-              onTabChange={(tab) => {
-                setActiveTab(tab)
-                updateUnreadBadge()
-              }}
+              onTabChange={handleNavigateTab}
               onManualLock={() => setIsManualLocked(true)}
               unreadCount={unreadCount}
             />
+          </div>
+        )}
+
+        {/* Double-tap back button exit toast notice */}
+        {showExitToast && (
+          <div className="fixed bottom-20 left-1/2 -translate-x-1/2 z-50 bg-slate-900/95 border border-slate-700/80 text-slate-200 text-xs px-4 py-2 rounded-full shadow-2xl backdrop-blur-md animate-in fade-in duration-200 flex items-center gap-2 pointer-events-none">
+            <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-ping" />
+            <span>Press back again to exit</span>
           </div>
         )}
 
