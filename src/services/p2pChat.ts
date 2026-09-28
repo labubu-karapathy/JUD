@@ -13,6 +13,32 @@ export type P2PPacket =
       isViewOnce?: boolean
       timestamp: number
     }
+  | {
+      type: 'media_chunk_start'
+      transferId: string
+      messageId: string
+      senderId: string
+      totalChunks: number
+      totalSize: number
+      mimeType: string
+      isViewOnce?: boolean
+      timestamp: number
+    }
+  | {
+      type: 'media_chunk'
+      transferId: string
+      chunkIndex: number
+      data: string
+    }
+  | {
+      type: 'media_chunk_complete'
+      transferId: string
+    }
+  | {
+      type: 'permission_sync'
+      mediaAllowed: boolean
+      senderId: string
+    }
   | { type: 'ack'; messageId: string; status: 'delivered' | 'read' }
   | { type: 'delete_msg'; messageId: string; timestamp: number }
 
@@ -30,6 +56,7 @@ export interface P2PChatCallbacks {
   onMessageDeleted?: (messageId: string) => void
   onAckReceived: (messageId: string, status: MessageStatus) => void
   onConnectionStateChange: (state: ConnectionState) => void
+  onPermissionChanged?: (mediaAllowed: boolean) => void
   onError: (error: string) => void
 }
 
@@ -48,6 +75,25 @@ export class P2PChatEngine {
   private connectionState: ConnectionState = 'idle'
   private isDestroyed: boolean = false
 
+  // WebRTC Chunked Transfer Reassembly Map
+  private activeIncomingTransfers = new Map<
+    string,
+    {
+      meta: {
+        messageId: string
+        senderId: string
+        totalChunks: number
+        totalSize: number
+        mimeType: string
+        isViewOnce?: boolean
+        timestamp: number
+      }
+      chunks: string[]
+      receivedCount: number
+      timer: ReturnType<typeof setTimeout>
+    }
+  >()
+
   constructor(
     matchInfo: MatchRecord,
     currentUserId: string,
@@ -63,6 +109,39 @@ export class P2PChatEngine {
 
   public updateMatchInfo(updated: MatchRecord): void {
     this.matchInfo = updated
+  }
+
+  public isDataChannelOpen(): boolean {
+    return Boolean(this.dataChannel && this.dataChannel.readyState === 'open')
+  }
+
+  /**
+   * Synchronizes media permissions across peers via DataChannel and Realtime Signal
+   */
+  public syncMediaPermission(allowed: boolean): void {
+    this.matchInfo.media_allowed = allowed
+
+    const packet: P2PPacket = {
+      type: 'permission_sync',
+      mediaAllowed: allowed,
+      senderId: this.currentUserId,
+    }
+
+    // 1. Direct DataChannel transfer if open
+    if (this.dataChannel && this.dataChannel.readyState === 'open') {
+      try {
+        this.dataChannel.send(JSON.stringify(packet))
+      } catch (err) {
+        console.warn('Failed to dispatch permission_sync via dataChannel:', err)
+      }
+    }
+
+    // 2. Realtime Signaling Broadcast
+    if (this.signalSubscription) {
+      this.signalSubscription.send(packet).catch((err) =>
+        console.warn('Failed to broadcast permission_sync signal:', err)
+      )
+    }
   }
 
   public setChatWindowActive(active: boolean): void {
@@ -194,6 +273,12 @@ export class P2PChatEngine {
       if (!payload || payload.senderId === this.currentUserId) return
 
       try {
+        if (payload.type === 'permission_sync') {
+          this.matchInfo.media_allowed = payload.mediaAllowed
+          this.callbacks.onPermissionChanged?.(payload.mediaAllowed)
+          return
+        }
+
         if (payload.type === 'offer') {
           // Male peer receives offer from female peer
           if (!this.peerConnection) {
@@ -241,7 +326,7 @@ export class P2PChatEngine {
 
   /**
    * Handles incoming packets over RTCDataChannel.
-   * Enforces Media Guard, View-Once rules, Delete-for-Everyone, ACKs, and Version Handshakes.
+   * Enforces Media Guard, View-Once rules, Delete-for-Everyone, ACKs, and Chunked Transfers.
    */
   private async handleIncomingPacket(packet: P2PPacket): Promise<void> {
     if (packet.type === 'ack') {
@@ -257,25 +342,78 @@ export class P2PChatEngine {
       return
     }
 
+    if (packet.type === 'permission_sync') {
+      this.matchInfo.media_allowed = packet.mediaAllowed
+      this.callbacks.onPermissionChanged?.(packet.mediaAllowed)
+      return
+    }
+
+    // --- WebRTC Chunked Media Transfer Protocol ---
+    if (packet.type === 'media_chunk_start') {
+      const existing = this.activeIncomingTransfers.get(packet.transferId)
+      if (existing) clearTimeout(existing.timer)
+
+      const timer = setTimeout(() => {
+        this.activeIncomingTransfers.delete(packet.transferId)
+      }, 60000) // 60s timeout
+
+      this.activeIncomingTransfers.set(packet.transferId, {
+        meta: {
+          messageId: packet.messageId,
+          senderId: packet.senderId,
+          totalChunks: packet.totalChunks,
+          totalSize: packet.totalSize,
+          mimeType: packet.mimeType,
+          isViewOnce: packet.isViewOnce,
+          timestamp: packet.timestamp,
+        },
+        chunks: new Array(packet.totalChunks),
+        receivedCount: 0,
+        timer,
+      })
+      return
+    }
+
+    if (packet.type === 'media_chunk') {
+      const transfer = this.activeIncomingTransfers.get(packet.transferId)
+      if (!transfer) return
+
+      if (transfer.chunks[packet.chunkIndex] === undefined) {
+        transfer.chunks[packet.chunkIndex] = packet.data
+        transfer.receivedCount++
+      }
+
+      if (transfer.receivedCount >= transfer.meta.totalChunks) {
+        clearTimeout(transfer.timer)
+        this.activeIncomingTransfers.delete(packet.transferId)
+        await this.finalizeIncomingMedia(transfer.meta, transfer.chunks.join(''))
+      }
+      return
+    }
+
+    if (packet.type === 'media_chunk_complete') {
+      const transfer = this.activeIncomingTransfers.get(packet.transferId)
+      if (transfer && transfer.receivedCount >= transfer.meta.totalChunks) {
+        clearTimeout(transfer.timer)
+        this.activeIncomingTransfers.delete(packet.transferId)
+        await this.finalizeIncomingMedia(transfer.meta, transfer.chunks.join(''))
+      }
+      return
+    }
+
     if (packet.type === 'chat') {
       // --- MEDIA GUARD RULES ---
       if (packet.media) {
         if (this.isFemale) {
-          // Male peer sending media to female peer
-          // Rule 1: One-time media sending is disabled for males
           if (packet.isViewOnce) {
             console.warn('Media guard blocked unauthorized view-once media from male peer.')
             return
           }
-          // Rule 2: Subject to female master media toggle
           if (!this.matchInfo.media_allowed) {
             console.warn('Media guard blocked unauthorized media transmission from male peer.')
             return
           }
         } else {
-          // Female peer sending media to male peer:
-          // Rule: Female can send one-time (view-once) media without permissions!
-          // Standard media is permitted if female master media toggle is on OR isViewOnce is true.
           if (!packet.isViewOnce && !this.matchInfo.media_allowed) {
             console.warn('Standard media transmission blocked.')
             return
@@ -321,7 +459,72 @@ export class P2PChatEngine {
   }
 
   /**
+   * Finalizes reassembly of chunked media transmission.
+   */
+  private async finalizeIncomingMedia(
+    meta: {
+      messageId: string
+      senderId: string
+      mimeType: string
+      isViewOnce?: boolean
+      timestamp: number
+    },
+    fullBlob: string
+  ): Promise<void> {
+    // --- MEDIA GUARD RULES ---
+    if (this.isFemale) {
+      if (meta.isViewOnce) {
+        console.warn('Media guard blocked unauthorized view-once media from male peer.')
+        return
+      }
+      if (!this.matchInfo.media_allowed) {
+        console.warn('Media guard blocked unauthorized media transmission from male peer.')
+        return
+      }
+    } else {
+      if (!meta.isViewOnce && !this.matchInfo.media_allowed) {
+        console.warn('Standard media transmission blocked.')
+        return
+      }
+    }
+
+    const initialStatus: MessageStatus = this.isChatWindowActive ? 'read' : 'delivered'
+
+    const localMsg: LocalMessage = {
+      id: meta.messageId,
+      matchId: this.matchId,
+      senderId: meta.senderId,
+      mediaBlob: fullBlob,
+      mediaType: meta.mimeType,
+      isViewOnce: meta.isViewOnce,
+      viewOnceStatus: meta.isViewOnce ? 'unopened' : undefined,
+      status: initialStatus,
+      timestamp: meta.timestamp || Date.now(),
+    }
+
+    // Persist in local IndexedDB (zero cloud storage)
+    await db.saveMessage(localMsg)
+    this.callbacks.onMessageReceived(localMsg)
+
+    // Dispatch Delivery ACK
+    this.sendPacket({
+      type: 'ack',
+      messageId: meta.messageId,
+      status: 'delivered',
+    })
+
+    if (this.isChatWindowActive) {
+      this.sendPacket({
+        type: 'ack',
+        messageId: meta.messageId,
+        status: 'read',
+      })
+    }
+  }
+
+  /**
    * Send text or media message over RTCDataChannel.
+   * Media is safely split into 16KB chunks to respect WebRTC SCTP packet limits.
    */
   public async sendMessage(
     text?: string,
@@ -339,20 +542,16 @@ export class P2PChatEngine {
     }
 
     const isChannelOpen = Boolean(this.dataChannel && this.dataChannel.readyState === 'open')
+
+    // Media constraint: Media is direct P2P only (never uploaded to server or offline relay)
+    if (media && !isChannelOpen) {
+      throw new Error('Partner is currently offline. Photos are transferred directly peer-to-peer and require both of you to be active in chat.')
+    }
+
     const messageId = `msg_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`
     const now = Date.now()
 
-    const packet: P2PPacket = {
-      type: 'chat',
-      id: messageId,
-      senderId: this.currentUserId,
-      text,
-      media,
-      isViewOnce,
-      timestamp: now,
-    }
-
-    // Status: 'sent' if channel is currently open, else 'sending' (cached on device for automatic delivery once connected)
+    // Status: 'sent' if channel is currently open, else 'sending'
     const localMsg: LocalMessage = {
       id: messageId,
       matchId: this.matchId,
@@ -369,7 +568,20 @@ export class P2PChatEngine {
     await db.saveMessage(localMsg)
 
     if (isChannelOpen) {
-      this.sendPacket(packet)
+      if (media) {
+        // Send large media payloads safely chunked (16KB per chunk)
+        await this.sendMediaInChunks(messageId, media, isViewOnce, now)
+      } else {
+        const packet: P2PPacket = {
+          type: 'chat',
+          id: messageId,
+          senderId: this.currentUserId,
+          text,
+          isViewOnce,
+          timestamp: now,
+        }
+        this.sendPacket(packet)
+      }
     } else {
       const receiverId = this.isFemale ? this.matchInfo.male_id : this.matchInfo.female_id
       // Zero-Knowledge Ephemeral Cloudflare Worker Offline Relay (0 DB writes to Supabase, 0 tokens)
@@ -378,6 +590,77 @@ export class P2PChatEngine {
     }
 
     return localMsg
+  }
+
+  /**
+   * Splits media blob into safe 16 KiB chunks with backpressure flow control.
+   */
+  private async sendMediaInChunks(
+    messageId: string,
+    media: { blob: string; mimeType: string },
+    isViewOnce: boolean,
+    timestamp: number
+  ): Promise<void> {
+    if (!this.dataChannel || this.dataChannel.readyState !== 'open') {
+      throw new Error('Connection lost before media transfer started')
+    }
+
+    const rawData = media.blob
+    const CHUNK_SIZE = 16 * 1024 // 16 KiB safe limit (well below 64 KiB SCTP limit)
+    const totalChunks = Math.ceil(rawData.length / CHUNK_SIZE)
+    const transferId = `xfer_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`
+
+    // 1. Send transfer start metadata
+    const startPacket: P2PPacket = {
+      type: 'media_chunk_start',
+      transferId,
+      messageId,
+      senderId: this.currentUserId,
+      totalChunks,
+      totalSize: rawData.length,
+      mimeType: media.mimeType,
+      isViewOnce,
+      timestamp,
+    }
+    await this.sendPacketWithFlowControl(startPacket)
+
+    // 2. Send each chunk sequentially with flow control
+    for (let i = 0; i < totalChunks; i++) {
+      const chunkData = rawData.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE)
+      const chunkPacket: P2PPacket = {
+        type: 'media_chunk',
+        transferId,
+        chunkIndex: i,
+        data: chunkData,
+      }
+      await this.sendPacketWithFlowControl(chunkPacket)
+    }
+
+    // 3. Send completion packet
+    const completePacket: P2PPacket = {
+      type: 'media_chunk_complete',
+      transferId,
+    }
+    await this.sendPacketWithFlowControl(completePacket)
+  }
+
+  /**
+   * Sends packet with backpressure flow control to avoid exhausting RTCDataChannel buffer.
+   */
+  private async sendPacketWithFlowControl(packet: P2PPacket): Promise<void> {
+    if (!this.dataChannel || this.dataChannel.readyState !== 'open') {
+      throw new Error('WebRTC DataChannel closed during transmission')
+    }
+
+    // Wait if bufferedAmount exceeds 64 KiB threshold
+    while (this.dataChannel.bufferedAmount > 64 * 1024) {
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      if (!this.dataChannel || this.dataChannel.readyState !== 'open') {
+        throw new Error('WebRTC DataChannel closed during transmission')
+      }
+    }
+
+    this.dataChannel.send(JSON.stringify(packet))
   }
 
   /**
@@ -393,16 +676,24 @@ export class P2PChatEngine {
       )
 
       for (const msg of pendingMessages) {
-        const packet: P2PPacket = {
-          type: 'chat',
-          id: msg.id,
-          senderId: this.currentUserId,
-          text: msg.text,
-          media: msg.mediaBlob && msg.mediaType ? { blob: msg.mediaBlob, mimeType: msg.mediaType } : undefined,
-          isViewOnce: msg.isViewOnce,
-          timestamp: msg.timestamp,
+        if (msg.mediaBlob && msg.mediaType) {
+          await this.sendMediaInChunks(
+            msg.id,
+            { blob: msg.mediaBlob, mimeType: msg.mediaType },
+            msg.isViewOnce || false,
+            msg.timestamp
+          )
+        } else {
+          const packet: P2PPacket = {
+            type: 'chat',
+            id: msg.id,
+            senderId: this.currentUserId,
+            text: msg.text,
+            isViewOnce: msg.isViewOnce,
+            timestamp: msg.timestamp,
+          }
+          this.sendPacket(packet)
         }
-        this.sendPacket(packet)
         await db.updateMessageStatus(msg.id, 'sent')
         this.callbacks.onAckReceived(msg.id, 'sent')
       }
@@ -466,6 +757,11 @@ export class P2PChatEngine {
    */
   public destroy(): void {
     this.isDestroyed = true
+    for (const transfer of this.activeIncomingTransfers.values()) {
+      clearTimeout(transfer.timer)
+    }
+    this.activeIncomingTransfers.clear()
+
     if (this.signalSubscription) {
       this.signalSubscription.unsubscribe()
       this.signalSubscription = null

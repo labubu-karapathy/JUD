@@ -30,6 +30,62 @@ import { RichEmojiPicker } from '../components/RichEmojiPicker'
 import { ProfileModal } from '../components/ProfileModal'
 import { drainOfflineMessages, pushOfflineEncryptedMessage } from '../services/offlineQueue'
 
+/**
+ * Client-Side Image Optimization Utility
+ * Resizes camera/gallery photos down to max 1600px width/height and compresses to JPEG
+ * to ensure rapid sub-second P2P transmission over WebRTC chunking.
+ */
+async function compressImage(file: File): Promise<{ blob: string; mimeType: string }> {
+  if (!file.type.startsWith('image/') || file.type === 'image/gif') {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve({ blob: reader.result as string, mimeType: file.type || 'image/jpeg' })
+      reader.onerror = reject
+      reader.readAsDataURL(file)
+    })
+  }
+
+  return new Promise((resolve) => {
+    const reader = new FileReader()
+    reader.onload = (e) => {
+      const img = new window.Image()
+      img.onload = () => {
+        const MAX_DIM = 1600
+        let { width, height } = img
+        if (width > MAX_DIM || height > MAX_DIM) {
+          if (width > height) {
+            height = Math.round((height * MAX_DIM) / width)
+            width = MAX_DIM
+          } else {
+            width = Math.round((width * MAX_DIM) / height)
+            height = MAX_DIM
+          }
+        }
+        const canvas = document.createElement('canvas')
+        canvas.width = width
+        canvas.height = height
+        const ctx = canvas.getContext('2d')
+        if (!ctx) {
+          resolve({ blob: reader.result as string, mimeType: file.type || 'image/jpeg' })
+          return
+        }
+        ctx.drawImage(img, 0, 0, width, height)
+        const mimeType = 'image/jpeg'
+        const dataUrl = canvas.toDataURL(mimeType, 0.82)
+        resolve({ blob: dataUrl, mimeType })
+      }
+      img.onerror = () => {
+        resolve({ blob: reader.result as string, mimeType: file.type || 'image/jpeg' })
+      }
+      img.src = e.target?.result as string
+    }
+    reader.onerror = () => {
+      resolve({ blob: '', mimeType: 'image/jpeg' })
+    }
+    reader.readAsDataURL(file)
+  })
+}
+
 interface ChatRoomProps {
   currentProfile: Profile
   match: MatchRecord
@@ -59,6 +115,7 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
   const [activeViewOnceMsgId, setActiveViewOnceMsgId] = useState<string | null>(null)
   const [previewMedia, setPreviewMedia] = useState<string | null>(null)
   const [sendAsViewOnce, setSendAsViewOnce] = useState<boolean>(false)
+  const [isSendingMedia, setIsSendingMedia] = useState<boolean>(false)
   const [mediaTooltip, setMediaTooltip] = useState<string>('')
   const [currentTime, setCurrentTime] = useState<number>(() => Date.now())
 
@@ -70,7 +127,7 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
   const engineRef = useRef<P2PChatEngine | null>(null)
   const messagesEndRef = useRef<HTMLDivElement | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
-  const inputRef = useRef<HTMLInputElement | null>(null)
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null)
 
   const isUserFemale = currentProfile.gender === 'female'
   const partner = matchState.partner
@@ -145,6 +202,9 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
         onConnectionStateChange: (state) => {
           setConnState(state)
         },
+        onPermissionChanged: (mediaAllowed) => {
+          setMatchState((prev) => ({ ...prev, media_allowed: mediaAllowed }))
+        },
         onError: (err) => {
           console.warn('P2P Chat Error:', err)
         },
@@ -159,6 +219,37 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
       engineRef.current = null
     }
   }, [matchState.id, currentProfile.id, isUserFemale, isPartnerDeactivated])
+
+  // Synchronize fresh match permissions on mount and periodically in background
+  useEffect(() => {
+    let isSubscribed = true
+
+    const syncMatch = async () => {
+      try {
+        const fresh = await api.getMatch(match.id)
+        if (isSubscribed && fresh) {
+          setMatchState((prev) => {
+            if (prev.media_allowed !== fresh.media_allowed || prev.has_female_initiated !== fresh.has_female_initiated) {
+              if (engineRef.current) {
+                engineRef.current.updateMatchInfo({ ...prev, ...fresh })
+              }
+              return { ...prev, ...fresh, partner: prev.partner || fresh.partner }
+            }
+            return prev
+          })
+        }
+      } catch {
+        // Silent background sync
+      }
+    }
+
+    syncMatch()
+    const interval = setInterval(syncMatch, 4000)
+    return () => {
+      isSubscribed = false
+      clearInterval(interval)
+    }
+  }, [match.id])
 
   // Update engine if match permissions change
   useEffect(() => {
@@ -181,8 +272,27 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
     try {
       await api.toggleMediaAllowed(matchState.id, newStatus)
       setMatchState((prev) => ({ ...prev, media_allowed: newStatus }))
+      if (engineRef.current) {
+        engineRef.current.syncMediaPermission(newStatus)
+      }
     } catch (err) {
       console.error('Failed to toggle media sharing:', err)
+    }
+  }
+
+  // Handle auto-expanding textarea (WhatsApp-like dynamic vertical growth + scrolling)
+  const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    setInputText(e.target.value)
+    const textarea = e.target
+    textarea.style.height = 'auto'
+    const newHeight = Math.min(textarea.scrollHeight, 120)
+    textarea.style.height = `${newHeight}px`
+  }
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault()
+      handleSendMessage()
     }
   }
 
@@ -194,6 +304,11 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
     const textToSend = inputText.trim()
     setInputText('')
     setIsEmojiPickerOpen(false)
+
+    // Reset textarea height to single line
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto'
+    }
 
     try {
       if (engineRef.current) {
@@ -232,8 +347,19 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
 
   // Append emoji to input text
   const handleAppendEmoji = (emoji: string) => {
-    setInputText((prev) => prev + emoji)
-    inputRef.current?.focus()
+    setInputText((prev) => {
+      const next = prev + emoji
+      if (textareaRef.current) {
+        setTimeout(() => {
+          if (textareaRef.current) {
+            textareaRef.current.style.height = 'auto'
+            textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 120)}px`
+          }
+        }, 10)
+      }
+      return next
+    })
+    textareaRef.current?.focus()
   }
 
   // 10-Minute "Delete for Everyone"
@@ -263,9 +389,12 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
     }
   }
 
-  // Send media attachment
+  // Send media attachment (Compressed on-device + transmitted via WebRTC SCTP chunking)
   const handleMediaSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
+    if (fileInputRef.current) {
+      fileInputRef.current.value = ''
+    }
     if (!file) return
 
     // Male Guard Check
@@ -275,33 +404,35 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
       return
     }
 
-    // Male cannot send view-once
-    const isViewOnceToSend = isUserFemale && sendAsViewOnce
-
-    const reader = new FileReader()
-    reader.onload = async () => {
-      if (typeof reader.result === 'string') {
-        const base64Data = reader.result
-        try {
-          if (engineRef.current) {
-            const localMsg = await engineRef.current.sendMessage(
-              undefined,
-              {
-                blob: base64Data,
-                mimeType: file.type || 'image/jpeg',
-              },
-              isViewOnceToSend
-            )
-            setMessages((prev) => [...prev, localMsg])
-            setTimeout(scrollToBottom, 50)
-            setSendAsViewOnce(false)
-          }
-        } catch (err: any) {
-          alert(err.message || 'Failed to transmit media')
-        }
-      }
+    // Direct P2P check: Media photos are zero-knowledge and transmitted only P2P when both are connected
+    if (!engineRef.current || !engineRef.current.isDataChannelOpen()) {
+      alert('Partner is not connected. Photos are transferred directly peer-to-peer and require both partners to be active in chat.')
+      return
     }
-    reader.readAsDataURL(file)
+
+    const isViewOnceToSend = isUserFemale && sendAsViewOnce
+    setIsSendingMedia(true)
+
+    try {
+      const compressed = await compressImage(file)
+      if (!compressed.blob) {
+        throw new Error('Could not process selected image')
+      }
+
+      const localMsg = await engineRef.current.sendMessage(
+        undefined,
+        compressed,
+        isViewOnceToSend
+      )
+      setMessages((prev) => [...prev, localMsg])
+      setTimeout(scrollToBottom, 50)
+      setSendAsViewOnce(false)
+    } catch (err: any) {
+      console.error('Media transfer failure:', err)
+      alert(err.message || 'Failed to transmit media')
+    } finally {
+      setIsSendingMedia(false)
+    }
   }
 
   // Open view-once media
@@ -493,6 +624,29 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
               </button>
             )}
 
+            {!isUserFemale && (
+              <div
+                className={`flex items-center space-x-1 px-2.5 py-1 rounded-full text-[11px] font-semibold border ${
+                  matchState.media_allowed
+                    ? 'bg-emerald-950/80 border-emerald-500/50 text-emerald-300'
+                    : 'bg-slate-800 border-slate-700 text-slate-400'
+                }`}
+                title={matchState.media_allowed ? 'Media sharing enabled by partner' : 'Only she can enable media sharing'}
+              >
+                {matchState.media_allowed ? (
+                  <>
+                    <Unlock className="w-3 h-3 text-emerald-400" />
+                    <span>Media Allowed</span>
+                  </>
+                ) : (
+                  <>
+                    <Lock className="w-3 h-3 text-slate-400" />
+                    <span>Media Locked</span>
+                  </>
+                )}
+              </div>
+            )}
+
             <div className="relative">
               <button
                 type="button"
@@ -682,14 +836,14 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
       {!isPartnerDeactivated ? (
         <form
           onSubmit={handleSendMessage}
-          className="sticky bottom-0 bg-slate-900 border-t border-slate-800 px-3 pt-2.5 pb-4 flex items-center space-x-2 z-20 shadow-lg"
-          style={{ paddingBottom: 'max(1rem, env(safe-area-inset-bottom, 0px) + 0.5rem)' }}
+          className="sticky bottom-0 bg-slate-900 border-t border-slate-800 px-3 pt-2 pb-3 flex items-end space-x-2 z-20 shadow-lg"
+          style={{ paddingBottom: 'max(0.75rem, env(safe-area-inset-bottom, 0px) + 0.5rem)' }}
         >
           {/* Emoji Picker Toggle Button */}
           <button
             type="button"
             onClick={() => setIsEmojiPickerOpen(!isEmojiPickerOpen)}
-            className={`p-2 rounded-full border transition-all ${
+            className={`p-2 rounded-full border mb-0.5 shrink-0 transition-all ${
               isEmojiPickerOpen
                 ? 'bg-rose-600 text-white border-rose-500'
                 : 'bg-slate-800 text-slate-300 hover:text-white border-slate-700'
@@ -699,10 +853,11 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
           </button>
 
           {/* Media Upload & View-Once Selection */}
-          <div className="relative flex items-center space-x-1">
+          <div className="relative flex items-center space-x-1 mb-0.5 shrink-0">
             <button
               type="button"
               onClick={() => {
+                if (isSendingMedia) return
                 if (!isUserFemale && !matchState.media_allowed) {
                   setMediaTooltip('Only she can enable media sharing')
                   setTimeout(() => setMediaTooltip(''), 3000)
@@ -710,19 +865,25 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
                 }
                 fileInputRef.current?.click()
               }}
-              disabled={!isUserFemale && !matchState.media_allowed}
+              disabled={isSendingMedia || (!isUserFemale && !matchState.media_allowed)}
               title={
-                !isUserFemale && !matchState.media_allowed
+                isSendingMedia
+                  ? 'Transmitting media over P2P...'
+                  : !isUserFemale && !matchState.media_allowed
                   ? 'Only she can enable media sharing'
                   : 'Attach image'
               }
               className={`p-2 rounded-full border transition-all ${
-                !isUserFemale && !matchState.media_allowed
+                isSendingMedia
+                  ? 'bg-rose-950/80 text-rose-300 border-rose-500/80 animate-pulse cursor-wait'
+                  : !isUserFemale && !matchState.media_allowed
                   ? 'bg-slate-950 text-slate-600 border-slate-800 cursor-not-allowed'
                   : 'bg-slate-800 text-slate-300 hover:text-white border-slate-700 hover:bg-slate-700'
               }`}
             >
-              {!isUserFemale && !matchState.media_allowed ? (
+              {isSendingMedia ? (
+                <div className="w-4 h-4 border-2 border-rose-400 border-t-transparent rounded-full animate-spin" />
+              ) : !isUserFemale && !matchState.media_allowed ? (
                 <Lock className="w-4 h-4 text-slate-500" />
               ) : (
                 <Paperclip className="w-4 h-4" />
@@ -754,21 +915,28 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
             />
           </div>
 
-          {/* Input Text Field */}
-          <input
-            ref={inputRef}
-            type="text"
-            value={inputText}
-            onChange={(e) => setInputText(e.target.value)}
-            placeholder={
-              !isUserFemale && !matchState.has_female_initiated
-                ? 'Waiting for her to initiate...'
-                : 'Type a message...'
-            }
-            disabled={!isUserFemale && !matchState.has_female_initiated}
-            className="flex-1 bg-slate-950 border border-slate-800 rounded-full px-4 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-rose-500 disabled:opacity-50"
-            style={{ fontSize: '15px' }} // Prevents iOS mobile zoom
-          />
+          {/* Auto-expanding Dynamic Textarea (WhatsApp Style) */}
+          <div className="flex-1 min-w-0 relative">
+            <textarea
+              ref={textareaRef}
+              rows={1}
+              value={inputText}
+              onChange={handleInputChange}
+              onKeyDown={handleKeyDown}
+              placeholder={
+                !isUserFemale && !matchState.has_female_initiated
+                  ? 'Waiting for her to initiate...'
+                  : 'Type a message...'
+              }
+              disabled={!isUserFemale && !matchState.has_female_initiated}
+              className="w-full bg-slate-950 border border-slate-800 rounded-2xl px-3.5 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-rose-500 disabled:opacity-50 resize-none overflow-y-auto block leading-relaxed"
+              style={{
+                fontSize: '15px',
+                minHeight: '38px',
+                maxHeight: '120px',
+              }}
+            />
+          </div>
 
           {/* Send Button */}
           <button
@@ -777,7 +945,7 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
               !inputText.trim() ||
               (!isUserFemale && !matchState.has_female_initiated)
             }
-            className="p-2 rounded-full bg-rose-600 hover:bg-rose-500 disabled:opacity-40 text-white transition-all shadow-md shadow-rose-600/30 active:scale-95"
+            className="p-2.5 rounded-full bg-rose-600 hover:bg-rose-500 disabled:opacity-40 text-white transition-all shadow-md shadow-rose-600/30 active:scale-95 mb-0.5 shrink-0"
           >
             <Send className="w-4 h-4" />
           </button>

@@ -1,11 +1,11 @@
 {
-  "version": "2.4.2",
-  "versionCode": 20402,
-  "releaseDate": "2026-09-28T20:00:00.000Z",
+  "version": "2.4.3",
+  "versionCode": 20403,
+  "releaseDate": "2026-09-28T23:25:00.000Z",
   "mandatory": false,
   "downloadUrl": "https://raw.githubusercontent.com/labubu-karapathy/JUD/main/JadavpurLoveBirds.apk",
-  "build_hash": "jlb-build-2026-09-28-v2.4.2",
-  "commit_message": "Release v2.4.2: Zero-cost auto-updater via GitHub Releases/CDN, Cloudflare blind drop offline relay, and WebRTC TURN traversal",
+  "build_hash": "jlb-build-2026-09-28-v2.4.3",
+  "commit_message": "Release v2.4.3: WebRTC 16KB SCTP media chunking, realtime permission sync across peers, and WhatsApp-like auto-expanding dynamic chat input",
   "apk_url": "https://raw.githubusercontent.com/labubu-karapathy/JUD/main/JadavpurLoveBirds.apk"
 }
 

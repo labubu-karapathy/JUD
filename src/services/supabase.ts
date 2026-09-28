@@ -391,6 +391,25 @@ export const api = {
     })
   },
 
+  async getMatch(matchId: string): Promise<MatchRecord | null> {
+    if (isLiveSupabaseConfigured) {
+      const { data, error } = await supabase
+        .from('matches')
+        .select('*')
+        .eq('id', matchId)
+        .maybeSingle()
+
+      if (error) {
+        console.warn('Error fetching single match:', error)
+        return null
+      }
+      return data || null
+    }
+
+    const matches = getLocalStored<MatchRecord[]>(LOCAL_STORAGE_MATCHES, [])
+    return matches.find((m) => m.id === matchId) || null
+  },
+
   async createMatch(femaleId: string, maleId: string): Promise<MatchRecord> {
     if (isLiveSupabaseConfigured) {
       const { data, error } = await supabase
