@@ -37,13 +37,10 @@ DROP POLICY IF EXISTS "Profiles read policy" ON public.profiles;
 DROP POLICY IF EXISTS "Profiles select policy" ON public.profiles;
 DROP POLICY IF EXISTS "Profiles viewable except if blocked or deactivated" ON public.profiles;
 
--- Open read access for approved, active student accounts
+-- Open read access for anon and authenticated (Discover query filters is_approved = true and is_deactivated = false in client)
 CREATE POLICY "Profiles read policy" ON public.profiles
   FOR SELECT TO anon, authenticated
-  USING (
-    is_deactivated = false
-    AND is_approved = true
-  );
+  USING (true);
 
 -- Owner update policy
 DROP POLICY IF EXISTS "Users can update own profile" ON public.profiles;
@@ -57,6 +54,12 @@ DROP POLICY IF EXISTS "Users can insert own profile" ON public.profiles;
 CREATE POLICY "Users can insert own profile" ON public.profiles
   FOR INSERT TO anon, authenticated
   WITH CHECK (true);
+
+-- Delete policy for admin actions
+DROP POLICY IF EXISTS "Users can delete own profile" ON public.profiles;
+CREATE POLICY "Users can delete own profile" ON public.profiles
+  FOR DELETE TO anon, authenticated
+  USING (true);
 
 -- 6. Lock down matches and chat_requests with targeted index coverage
 CREATE INDEX IF NOT EXISTS idx_matches_female_male ON public.matches(female_id, male_id);
