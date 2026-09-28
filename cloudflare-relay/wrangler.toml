@@ -1,0 +1,10 @@
+name = "jlb-offline-relay"
+main = "worker.ts"
+compatibility_date = "2024-09-01"
+
+# Cloudflare KV Namespace Binding for Zero-Knowledge Ephemeral Queue
+# Create via: npx wrangler kv:namespace create OFFLINE_QUEUE
+[[kv_namespaces]]
+binding = "OFFLINE_QUEUE"
+id = "jlb_offline_queue_kv"
+preview_id = "jlb_offline_queue_preview"

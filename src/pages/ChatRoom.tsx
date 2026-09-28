@@ -28,12 +28,7 @@ import { P2PChatEngine, type ConnectionState } from '../services/p2pChat'
 import { ReportModal } from '../components/ReportModal'
 import { RichEmojiPicker } from '../components/RichEmojiPicker'
 import { ProfileModal } from '../components/ProfileModal'
-import {
-  pushOfflineEncryptedMessage,
-  drainOfflineEncryptedMessages,
-  backupMatchChatToGitHub,
-  restoreMatchChatFromGitHub,
-} from '../services/githubRelay'
+import { drainOfflineMessages, pushOfflineEncryptedMessage } from '../services/offlineQueue'
 
 interface ChatRoomProps {
   currentProfile: Profile
@@ -88,61 +83,20 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
   // Load local messages from Dexie.js (Zero server storage) with automatic offline drain
   const loadLocalMessages = useCallback(async () => {
     try {
-      // Drain any queued offline messages for current user from ephemeral mailbox
-      const queued = await api.fetchAndDrainOfflineMessages(currentProfile.id)
-      if (queued && queued.length > 0) {
-        for (const item of queued) {
-          const localMsg: LocalMessage = {
-            id: item.id,
-            matchId: item.match_id,
-            senderId: item.sender_id,
-            text: item.text,
-            mediaBlob: item.media_blob,
-            mediaType: item.media_type,
-            isViewOnce: item.is_view_once,
-            viewOnceStatus: item.is_view_once ? 'unopened' : undefined,
-            status: 'delivered',
-            timestamp: item.created_at || Date.now(),
-          }
-          await db.saveMessage(localMsg)
-        }
-      }
+      // Drain any queued offline messages for current user from Cloudflare ephemeral relay
+      await drainOfflineMessages(currentProfile.id)
 
-      // Also drain any GitHub encrypted offline messages
-      await drainOfflineEncryptedMessages(currentProfile.id)
-
-      let stored = await db.getMessagesForMatch(matchState.id)
-      if (stored.length === 0 && partner) {
-        // Try restoring backed-up text messages from GitHub
-        const restored = await restoreMatchChatFromGitHub(currentProfile.id, partner.id)
-        if (restored.length > 0) {
-          stored = restored
-        }
-      }
-
+      const stored = await db.getMessagesForMatch(matchState.id)
       setMessages(stored)
       setTimeout(scrollToBottom, 50)
     } catch (err) {
       console.error('Failed to load local messages:', err)
     }
-  }, [currentProfile.id, matchState.id, partner])
+  }, [currentProfile.id, matchState.id])
 
   useEffect(() => {
     loadLocalMessages()
   }, [loadLocalMessages])
-
-  // Automatically back up text messages to GitHub encrypted vault (zero media upload)
-  useEffect(() => {
-    if (messages.length > 0 && partner) {
-      backupMatchChatToGitHub(
-        currentProfile.id,
-        partner.id,
-        currentProfile.grad_year || 2029,
-        partner.grad_year || 2029,
-        messages
-      ).catch(() => {})
-    }
-  }, [messages.length, currentProfile.id, currentProfile.grad_year, partner?.id, partner?.grad_year])
 
   // Listen for peer deactivation
   useEffect(() => {
@@ -261,25 +215,16 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
         setMessages((prev) => [...prev, localMsg])
         setTimeout(scrollToBottom, 50)
 
-        // Enqueue to ephemeral offline mailbox
+        // Zero-Knowledge Ephemeral Cloudflare Worker Offline Relay (0 DB writes to Supabase)
         const receiverId = isUserFemale ? matchState.male_id : matchState.female_id
-        api.enqueueOfflineMessage({
-          id: messageId,
-          match_id: matchState.id,
-          sender_id: currentProfile.id,
-          receiver_id: receiverId,
-          text: textToSend,
-          created_at: Date.now(),
-        }).catch((err) => console.warn('[Offline Fallback Notice]:', err))
-
-        // Also push encrypted to private GitHub repo backend as secure offline fallback
         pushOfflineEncryptedMessage(
           currentProfile.id,
           receiverId,
           matchState.id,
           localMsg
-        ).catch((err) => console.warn('[GitHub Offline Fallback]:', err))
+        ).catch((err) => console.warn('[Offline Relay Fallback]:', err))
       }
+
     } catch (err: any) {
       console.error('Failed to send text packet:', err)
     }

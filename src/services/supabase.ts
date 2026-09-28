@@ -929,52 +929,14 @@ export const api = {
     }
   },
 
-  // --- ZERO-STORAGE OFFLINE P2P MESSAGE RELAY & STORE-AND-FORWARD ---
-  async enqueueOfflineMessage(msg: OfflineQueueMessage): Promise<void> {
-    if (isLiveSupabaseConfigured) {
-      try {
-        const { error } = await supabase.from('offline_message_queue').insert({
-          id: msg.id,
-          match_id: msg.match_id,
-          sender_id: msg.sender_id,
-          receiver_id: msg.receiver_id,
-          text: msg.text || null,
-          media_blob: msg.media_blob || null,
-          media_type: msg.media_type || null,
-          is_view_once: Boolean(msg.is_view_once),
-          created_at: msg.created_at,
-        })
-        if (error) console.warn('[Supabase Offline Queue Insert Warning]:', error)
-      } catch (err) {
-        console.warn('[Offline Queue Network Warning]:', err)
-      }
-    }
+  // --- ZERO-STORAGE OFFLINE P2P MESSAGE RELAY (DELEGATED TO CLOUDFLARE WORKER) ---
+  // Retained as zero-write no-ops to protect Supabase Free-Tier database quotas
+  async enqueueOfflineMessage(_msg: OfflineQueueMessage): Promise<void> {
+    // Zero-write: Handled exclusively by Cloudflare Worker blind drop
   },
 
-  async fetchAndDrainOfflineMessages(receiverId: string): Promise<OfflineQueueMessage[]> {
-    if (isLiveSupabaseConfigured) {
-      try {
-        const { data, error } = await supabase
-          .from('offline_message_queue')
-          .select('*')
-          .eq('receiver_id', receiverId)
-          .order('created_at', { ascending: true })
-
-        if (error) {
-          console.warn('[Supabase Offline Queue Fetch Error]:', error)
-          return []
-        }
-
-        if (data && data.length > 0) {
-          // Immediately purge drained messages from Supabase to guarantee zero permanent server storage
-          const ids = data.map((d: any) => d.id)
-          await supabase.from('offline_message_queue').delete().in('id', ids)
-          return data as OfflineQueueMessage[]
-        }
-      } catch (err) {
-        console.warn('[Offline Queue Drain Warning]:', err)
-      }
-    }
+  async fetchAndDrainOfflineMessages(_receiverId: string): Promise<OfflineQueueMessage[]> {
+    // Zero-write: Handled exclusively by Cloudflare Worker blind drop
     return []
   },
 

@@ -23,7 +23,6 @@ def main():
         print("\n[2/4] Clearing user entry data from tables...")
         # Tables with user entries
         user_tables = [
-            'offline_message_queue',
             'chat_requests',
             'matches',
             'blocks',
@@ -58,7 +57,6 @@ def main():
             'blocks',
             'reports',
             'chat_requests',
-            'offline_message_queue',
             'global_announcements',
             'app_updates'
         ]

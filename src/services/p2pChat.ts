@@ -1,6 +1,7 @@
 import { db, type LocalMessage, type MessageStatus } from '../db'
 import { api, type MatchRecord } from './supabase'
-import { pushOfflineEncryptedMessage } from './githubRelay'
+import { pushOfflineEncryptedMessage } from './offlineQueue'
+import { createCampusPeerConnection } from './webrtc'
 
 export type P2PPacket = 
   | {
@@ -30,13 +31,6 @@ export interface P2PChatCallbacks {
   onAckReceived: (messageId: string, status: MessageStatus) => void
   onConnectionStateChange: (state: ConnectionState) => void
   onError: (error: string) => void
-}
-
-const RTC_CONFIG: RTCConfiguration = {
-  iceServers: [
-    { urls: 'stun:stun.l.google.com:19302' },
-    { urls: 'stun:stun1.l.google.com:19302' },
-  ],
 }
 
 export class P2PChatEngine {
@@ -129,7 +123,7 @@ export class P2PChatEngine {
   private createPeerConnection(): void {
     if (this.peerConnection) return
 
-    this.peerConnection = new RTCPeerConnection(RTC_CONFIG)
+    this.peerConnection = createCampusPeerConnection()
 
     this.peerConnection.onicecandidate = (event) => {
       if (event.candidate && this.signalSubscription) {
@@ -378,21 +372,9 @@ export class P2PChatEngine {
       this.sendPacket(packet)
     } else {
       const receiverId = this.isFemale ? this.matchInfo.male_id : this.matchInfo.female_id
-      api.enqueueOfflineMessage({
-        id: messageId,
-        match_id: this.matchId,
-        sender_id: this.currentUserId,
-        receiver_id: receiverId,
-        text,
-        media_blob: media?.blob,
-        media_type: media?.mimeType,
-        is_view_once: isViewOnce,
-        created_at: now,
-      }).catch((err) => console.warn('[P2P Offline Enqueue Notice]:', err))
-
-      // Secondary encrypted offline relay to GitHub private repository
+      // Zero-Knowledge Ephemeral Cloudflare Worker Offline Relay (0 DB writes to Supabase, 0 tokens)
       pushOfflineEncryptedMessage(this.currentUserId, receiverId, this.matchId, localMsg)
-        .catch((err) => console.warn('[GitHub Offline Relay Notice]:', err))
+        .catch((err) => console.warn('[Offline Relay Notice]:', err))
     }
 
     return localMsg

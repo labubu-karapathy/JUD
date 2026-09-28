@@ -11,8 +11,8 @@ import { InstallPwaBanner } from './components/InstallPwaBanner'
 import { api, type Profile, type MatchRecord, type GlobalAnnouncement } from './services/supabase'
 import { db } from './db'
 import { AlertOctagon, Radio, X, Sparkles, Download } from 'lucide-react'
-import { onOTAUpdateNotification, type UpdateNotice } from './services/p2pUpdater'
-import { checkGitHubRepoUpdate, drainOfflineEncryptedMessages } from './services/githubRelay'
+import { checkForUpdate, downloadAndInstallUpdate, type ReleaseManifest } from './services/updateService'
+import { drainOfflineMessages } from './services/offlineQueue'
 import { GlobalCampusChatDrawer } from './components/GlobalCampusChatDrawer'
 
 export const App: React.FC = () => {
@@ -23,7 +23,8 @@ export const App: React.FC = () => {
   const [isManualLocked, setIsManualLocked] = useState<boolean>(false)
   const [unreadCount, setUnreadCount] = useState<number>(0)
   const [activeAnnouncement, setActiveAnnouncement] = useState<GlobalAnnouncement | null>(null)
-  const [otaNotice, setOtaNotice] = useState<UpdateNotice | null>(null)
+  const [updateManifest, setUpdateManifest] = useState<ReleaseManifest | null>(null)
+  const [isUpdating, setIsUpdating] = useState<boolean>(false)
   const [isGlobalChatOpen, setIsGlobalChatOpen] = useState<boolean>(false)
 
   // Route state: User Interface vs Admin Desktop Suite
@@ -124,21 +125,22 @@ export const App: React.FC = () => {
     return () => unsub()
   }, [])
 
-  // GitHub JUD Fleet Auto-Updates (clean repository pulling)
+  // Zero-Cost Fleet Auto-Updates (GitHub Releases CDN manifest check)
   useEffect(() => {
-    const unsubNotice = onOTAUpdateNotification((notice) => {
-      setOtaNotice(notice)
-      setTimeout(() => {
-        setOtaNotice(null)
-      }, 7000)
-    })
-
-    // Check GitHub JUD repository for fleet updates
-    checkGitHubRepoUpdate().catch((err) => console.warn('[GitHub Auto-Update Check]:', err))
-
-    return () => {
-      unsubNotice()
+    const runUpdateCheck = async () => {
+      try {
+        const result = await checkForUpdate()
+        if (result.hasUpdate && result.remoteManifest) {
+          setUpdateManifest(result.remoteManifest)
+        }
+      } catch (err) {
+        console.warn('[CDN Update Check Notice]:', err)
+      }
     }
+
+    runUpdateCheck()
+    const timer = setInterval(runUpdateCheck, 30 * 60 * 1000)
+    return () => clearInterval(timer)
   }, [])
 
   // Poll/track unread count for bottom nav badge
@@ -161,35 +163,14 @@ export const App: React.FC = () => {
     return () => clearInterval(interval)
   }, [updateUnreadBadge])
 
-  // Zero-Storage Ephemeral Offline Message Drain & Realtime Inbox
+  // Zero-Storage Ephemeral Offline Message Drain via Cloudflare Worker
   useEffect(() => {
     if (!currentProfile) return
 
-    const drainOfflineMessages = async () => {
+    const handleDrain = async () => {
       try {
-        const queued = await api.fetchAndDrainOfflineMessages(currentProfile.id)
-        if (queued && queued.length > 0) {
-          for (const item of queued) {
-            const localMsg = {
-              id: item.id,
-              matchId: item.match_id,
-              senderId: item.sender_id,
-              text: item.text,
-              mediaBlob: item.media_blob,
-              mediaType: item.media_type,
-              isViewOnce: item.is_view_once,
-              viewOnceStatus: item.is_view_once ? ('unopened' as const) : undefined,
-              status: 'delivered' as const,
-              timestamp: item.created_at || Date.now(),
-            }
-            await db.saveMessage(localMsg)
-          }
-          await updateUnreadBadge()
-        }
-
-        // Drain secondary encrypted GitHub inbox (ephemeral zero-footprint)
-        const ghMessages = await drainOfflineEncryptedMessages(currentProfile.id)
-        if (ghMessages && ghMessages.length > 0) {
+        const drained = await drainOfflineMessages(currentProfile.id)
+        if (drained && drained.length > 0) {
           await updateUnreadBadge()
         }
       } catch (err) {
@@ -197,12 +178,12 @@ export const App: React.FC = () => {
       }
     }
 
-    drainOfflineMessages()
+    handleDrain()
 
     const inbox = api.createUserSignalChannel(currentProfile.id, async (payload) => {
       if (!payload) return
       if (payload.type === 'offline_queue_ping') {
-        await drainOfflineMessages()
+        await handleDrain()
       } else if (payload.type === 'ack' && payload.messageId) {
         await db.updateMessageStatus(payload.messageId, payload.status)
       }
@@ -346,35 +327,45 @@ export const App: React.FC = () => {
         }}
       >
         {/* OTA Auto-Update Live Synchronization Banner (Authenticated Users Only) */}
-        {currentProfile && otaNotice && (
+        {/* Zero-Cost Auto-Update Live CDN Banner (Authenticated Users Only) */}
+        {currentProfile && updateManifest && (
           <div className="bg-emerald-950/95 border-b border-emerald-500/50 px-3.5 py-2.5 flex items-center justify-between text-xs text-emerald-200 z-50 shadow-lg backdrop-blur-md animate-in slide-in-from-top duration-300">
             <div className="flex items-center space-x-2.5 truncate mr-2">
               <div className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping shrink-0" />
               <div className="truncate">
                 <div className="font-bold text-[11px] text-emerald-300 flex items-center gap-1.5">
-                  <span>🚀 Campus Update Available (v{otaNotice.version})</span>
+                  <span>🚀 Campus Update Available (v{updateManifest.version})</span>
                   <span className="text-[9px] bg-emerald-900/80 px-1.5 py-0.5 rounded text-emerald-400 border border-emerald-700/60 uppercase">
-                    GitHub JUD
+                    GitHub CDN
                   </span>
                 </div>
-                <p className="text-[10px] text-emerald-400/90 truncate">{otaNotice.message} • All chats preserved</p>
+                <p className="text-[10px] text-emerald-400/90 truncate">
+                  {updateManifest.commit_message || 'New features & security enhancements'} • IndexedDB 100% preserved
+                </p>
               </div>
             </div>
             <div className="flex items-center gap-2 shrink-0">
-              {otaNotice.apkUrl && (
-                <a
-                  href={otaNotice.apkUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-[10px] rounded-lg shadow transition-colors flex items-center gap-1"
-                >
-                  <Download className="w-3 h-3" />
-                  <span>Update APK</span>
-                </a>
-              )}
               <button
                 type="button"
-                onClick={() => setOtaNotice(null)}
+                onClick={async () => {
+                  try {
+                    setIsUpdating(true)
+                    await downloadAndInstallUpdate(updateManifest.downloadUrl)
+                  } catch (e: any) {
+                    console.warn('Install update error:', e)
+                  } finally {
+                    setIsUpdating(false)
+                  }
+                }}
+                disabled={isUpdating}
+                className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold text-[10px] rounded-lg shadow transition-colors flex items-center gap-1"
+              >
+                <Download className="w-3 h-3" />
+                <span>{isUpdating ? 'Downloading...' : 'Update APK'}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setUpdateManifest(null)}
                 className="p-1 text-emerald-400 hover:text-white shrink-0"
               >
                 <X className="w-3.5 h-3.5" />

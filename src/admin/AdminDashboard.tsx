@@ -27,7 +27,7 @@ import { csvSync } from './services/csvSync'
 import { ApprovalModal } from './components/ApprovalModal'
 import { JADAVPUR_DEPARTMENTS } from '../utils/departmentValidator'
 import { api, type Profile } from '../services/supabase'
-import { CURRENT_APP_VERSION } from '../services/p2pUpdater'
+import { CURRENT_APP_VERSION } from '../services/updateService'
 
 const GRADUATION_YEARS = [2024, 2025, 2026, 2027, 2028, 2029]
 

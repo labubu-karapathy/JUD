@@ -17,7 +17,6 @@ import { sha256, vibrateDevice } from '../utils/crypto'
 import { api, type Profile } from '../services/supabase'
 import { db } from '../db'
 import { JADAVPUR_DEPARTMENTS } from '../utils/departmentValidator'
-import { backupUserProfileToGitHub, fetchUserProfileFromGitHub } from '../services/githubRelay'
 
 interface AuthProps {
   onAuthSuccess: (profile: Profile) => void
@@ -140,25 +139,11 @@ export const Auth: React.FC<AuthProps> = ({ onAuthSuccess }) => {
         return
       }
 
-      // A. Check GitHub Encrypted Vault
+      // Verify credentials via Supabase / Local verification
       let activeProfile: Profile | null = null
-      try {
-        const ghProfile = await fetchUserProfileFromGitHub(cleanId, signInPin)
-        if (ghProfile) {
-          activeProfile = ghProfile as Profile
-        }
-      } catch (err) {
-        console.warn('GitHub profile retrieval:', err)
-      }
-
-      // B. Check Supabase as primary/sync source
-      if (!activeProfile) {
-        const remote = await api.checkExistingStudent(cleanId.toUpperCase(), cleanId)
-        if (remote && remote.pin_hash === enteredHash) {
-          activeProfile = remote
-          // Synchronize to GitHub encrypted vault
-          backupUserProfileToGitHub(remote, signInPin).catch(() => {})
-        }
+      const remote = await api.checkExistingStudent(cleanId.toUpperCase(), cleanId)
+      if (remote && remote.pin_hash === enteredHash) {
+        activeProfile = remote
       }
 
       if (!activeProfile) {
@@ -359,11 +344,6 @@ export const Auth: React.FC<AuthProps> = ({ onAuthSuccess }) => {
       // 3. Save profile locally so user can quickly sign back in upon logout
       localStorage.setItem(SAVED_PROFILE_KEY, JSON.stringify(saved))
       localStorage.setItem('jud_current_user_id', saved.id)
-
-      // Back up encrypted profile to GitHub repository (labubu-karapathy/backend)
-      backupUserProfileToGitHub(saved, pin).catch((ghErr) =>
-        console.warn('[GitHub Profile Backup Error]:', ghErr)
-      )
 
       // Show the dedicated "Request Sent, Waiting for Approval" window modal!
       setPendingApprovalProfile(saved)
