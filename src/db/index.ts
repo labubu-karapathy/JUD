@@ -136,6 +136,59 @@ export class AppLocalDatabase extends Dexie {
       this.local_messages.clear(),
     ])
   }
+
+  async exportChatBackup(): Promise<string> {
+    const messages = await this.local_messages.toArray()
+    const profiles = await this.cached_profiles.toArray()
+    const backup = {
+      appName: 'JadavpurLoveBirds',
+      schemaVersion: 1,
+      timestamp: Date.now(),
+      exportedAt: new Date().toISOString(),
+      messages,
+      profiles,
+    }
+    return JSON.stringify(backup, null, 2)
+  }
+
+  async importChatBackup(jsonString: string): Promise<{
+    success: boolean
+    messagesRestored: number
+    profilesRestored: number
+    error?: string
+  }> {
+    try {
+      const data = JSON.parse(jsonString)
+      if (!data || !Array.isArray(data.messages)) {
+        return {
+          success: false,
+          messagesRestored: 0,
+          profilesRestored: 0,
+          error: 'Invalid backup file format: missing messages array',
+        }
+      }
+      if (data.messages.length > 0) {
+        await this.local_messages.bulkPut(data.messages)
+      }
+      let profilesRestored = 0
+      if (data.profiles && Array.isArray(data.profiles) && data.profiles.length > 0) {
+        await this.cached_profiles.bulkPut(data.profiles)
+        profilesRestored = data.profiles.length
+      }
+      return {
+        success: true,
+        messagesRestored: data.messages.length,
+        profilesRestored,
+      }
+    } catch (err: any) {
+      return {
+        success: false,
+        messagesRestored: 0,
+        profilesRestored: 0,
+        error: err?.message || 'Failed to parse backup JSON',
+      }
+    }
+  }
 }
 
 export const db = new AppLocalDatabase()

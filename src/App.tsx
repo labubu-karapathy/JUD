@@ -486,6 +486,7 @@ export const App: React.FC = () => {
               <Discover
                 currentProfile={currentProfile}
                 onNavigateToMatches={() => handleNavigateTab('matches')}
+                onSelectMatch={(match) => setActiveChatMatch(match)}
               />
             )}
 

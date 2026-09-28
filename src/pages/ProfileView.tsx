@@ -13,11 +13,22 @@ import {
   Pencil,
   Check,
   Loader2,
+  RefreshCw,
+  Download,
+  HardDrive,
+  Upload,
+  CheckCircle2,
 } from 'lucide-react'
 import { InstagramIcon } from '../components/InstagramIcon'
 import { api, type Profile, calculateCurrentAge } from '../services/supabase'
 import { db } from '../db'
 import { sha256, vibrateDevice } from '../utils/crypto'
+import {
+  checkForUpdate,
+  applyOtaUpdate,
+  downloadAndInstallUpdate,
+  CURRENT_APP_VERSION,
+} from '../services/updateService'
 
 interface ProfileViewProps {
   currentProfile: Profile
@@ -88,9 +99,118 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   // Transient Toast Feedback
   const [toastMessage, setToastMessage] = useState<string>('')
 
+  // OTA Updates State
+  const [isCheckingUpdate, setIsCheckingUpdate] = useState<boolean>(false)
+  const [updateInfo, setUpdateInfo] = useState<{
+    available: boolean
+    latestVersion?: string
+    releaseNotes?: string
+    isNative?: boolean
+    directApkUrl?: string
+  } | null>(null)
+  const [isUpdating, setIsUpdating] = useState<boolean>(false)
+
+  // Local Chat Backup & Restore State
+  const backupFileInputRef = useRef<HTMLInputElement>(null)
+  const [isExportingBackup, setIsExportingBackup] = useState<boolean>(false)
+  const [isImportingBackup, setIsImportingBackup] = useState<boolean>(false)
+
   const showToast = (msg: string) => {
     setToastMessage(msg)
     setTimeout(() => setToastMessage(''), 3500)
+  }
+
+  // Handle Manual Check for Updates
+  const handleCheckForUpdates = async () => {
+    setIsCheckingUpdate(true)
+    try {
+      const result = await checkForUpdate()
+      if (result.hasUpdate && result.remoteManifest) {
+        setUpdateInfo({
+          available: true,
+          latestVersion: result.remoteManifest.version,
+          releaseNotes: result.remoteManifest.commit_message || 'Performance and bug fixes',
+          isNative: !result.isOtaAvailable,
+          directApkUrl: result.remoteManifest.downloadUrl,
+        })
+        showToast(`Update v${result.remoteManifest.version} is available!`)
+      } else {
+        setUpdateInfo({ available: false })
+        showToast('App is up to date!')
+      }
+    } catch (err: any) {
+      console.error('Update check error:', err)
+      showToast('Failed to check for updates. Check internet connection.')
+    } finally {
+      setIsCheckingUpdate(false)
+    }
+  }
+
+  // Handle Applying OTA Update
+  const handleApplyUpdate = async () => {
+    if (!updateInfo?.available) return
+    setIsUpdating(true)
+    try {
+      showToast('Downloading and installing update...')
+      const result = await checkForUpdate()
+      if (result.isOtaAvailable && result.remoteManifest?.webBundleUrl) {
+        await applyOtaUpdate(result.remoteManifest.webBundleUrl, result.remoteManifest.version)
+      } else if (result.remoteManifest?.downloadUrl) {
+        await downloadAndInstallUpdate(result.remoteManifest.downloadUrl)
+      }
+    } catch (err: any) {
+      console.error('Failed to apply update:', err)
+      showToast(err?.message || 'Failed to update')
+      setIsUpdating(false)
+    }
+  }
+
+  // Handle Export Local Chat Backup (JSON)
+  const handleExportBackup = async () => {
+    setIsExportingBackup(true)
+    try {
+      const jsonStr = await db.exportChatBackup()
+      const blob = new Blob([jsonStr], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      const dateStr = new Date().toISOString().slice(0, 10)
+      a.href = url
+      a.download = `JLB_Chat_Backup_${dateStr}.json`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+      showToast('Chat backup downloaded to device!')
+    } catch (err: any) {
+      console.error('Backup export error:', err)
+      showToast('Failed to export backup')
+    } finally {
+      setIsExportingBackup(false)
+    }
+  }
+
+  // Handle Import Local Chat Backup (JSON)
+  const handleImportBackup = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setIsImportingBackup(true)
+    try {
+      const text = await file.text()
+      const result = await db.importChatBackup(text)
+      if (result.success) {
+        showToast(`Restored ${result.messagesRestored} messages & ${result.profilesRestored} profiles!`)
+      } else {
+        showToast(`Restore failed: ${result.error}`)
+      }
+    } catch (err: any) {
+      console.error('Backup import error:', err)
+      showToast('Invalid backup file')
+    } finally {
+      setIsImportingBackup(false)
+      if (backupFileInputRef.current) {
+        backupFileInputRef.current.value = ''
+      }
+    }
   }
 
   // Dynamic age auto-increments with each passing calendar year
@@ -478,6 +598,136 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
             </button>
           </form>
         )}
+      </div>
+
+      {/* App Updates Section (Zero-Cost OTA) */}
+      <div className="bg-slate-900 border border-slate-800 rounded-3xl p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <h3 className="text-xs uppercase tracking-wider text-slate-400 font-semibold flex items-center space-x-1.5">
+            <RefreshCw className={`w-3.5 h-3.5 text-rose-400 ${isCheckingUpdate ? 'animate-spin' : ''}`} />
+            <span>App Updates (Zero-Cost OTA)</span>
+          </h3>
+          <span className="text-[10px] font-mono bg-rose-500/10 border border-rose-500/20 text-rose-300 px-2 py-0.5 rounded-full">
+            v{CURRENT_APP_VERSION}
+          </span>
+        </div>
+        <p className="text-[11px] text-slate-400 text-left leading-relaxed">
+          Get seamless bug fixes and features directly from the open-source CDN without manual APK reinstalls.
+        </p>
+
+        {updateInfo?.available ? (
+          <div className="p-3 bg-rose-950/40 border border-rose-800/60 rounded-2xl space-y-2 text-left">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold text-rose-200">
+                New Version v{updateInfo.latestVersion} Available!
+              </span>
+              <span className="text-[10px] bg-rose-500 text-white px-1.5 py-0.5 rounded font-bold">NEW</span>
+            </div>
+            {updateInfo.releaseNotes && (
+              <p className="text-[11px] text-rose-300/80 leading-snug">{updateInfo.releaseNotes}</p>
+            )}
+            {updateInfo.isNative ? (
+              <a
+                href={updateInfo.directApkUrl || 'https://github.com/labubu-karapathy/JUD/releases'}
+                target="_blank"
+                rel="noreferrer"
+                className="w-full py-2 bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold rounded-xl flex items-center justify-center space-x-1.5 transition-all block text-center"
+              >
+                <Download className="w-3.5 h-3.5 inline mr-1" />
+                <span>Download APK Upgrade</span>
+              </a>
+            ) : (
+              <button
+                type="button"
+                onClick={handleApplyUpdate}
+                disabled={isUpdating}
+                className="w-full py-2 bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white text-xs font-semibold rounded-xl flex items-center justify-center space-x-1.5 transition-all"
+              >
+                {isUpdating ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>Installing & Restarting...</span>
+                  </>
+                ) : (
+                  <>
+                    <Download className="w-3.5 h-3.5" />
+                    <span>Apply Instant OTA Update</span>
+                  </>
+                )}
+              </button>
+            )}
+          </div>
+        ) : updateInfo && !updateInfo.available ? (
+          <div className="p-2.5 bg-emerald-950/40 border border-emerald-800/50 rounded-xl flex items-center space-x-2 text-emerald-300 text-xs">
+            <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+            <span>You are on the latest version (v{CURRENT_APP_VERSION}).</span>
+          </div>
+        ) : null}
+
+        <button
+          type="button"
+          onClick={handleCheckForUpdates}
+          disabled={isCheckingUpdate}
+          className="w-full py-2.5 px-3 bg-slate-950 hover:bg-slate-800 border border-slate-800 text-xs font-medium rounded-xl flex items-center justify-center space-x-2 text-slate-300 hover:text-white transition-all disabled:opacity-50"
+        >
+          <RefreshCw className={`w-3.5 h-3.5 text-rose-400 ${isCheckingUpdate ? 'animate-spin' : ''}`} />
+          <span>{isCheckingUpdate ? 'Checking GitHub CDN...' : 'Check for Updates'}</span>
+        </button>
+      </div>
+
+      {/* Local Chat Storage & Backup Section */}
+      <div className="bg-slate-900 border border-slate-800 rounded-3xl p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <h3 className="text-xs uppercase tracking-wider text-slate-400 font-semibold flex items-center space-x-1.5">
+            <HardDrive className="w-3.5 h-3.5 text-rose-400" />
+            <span>Local Chat Storage & Backup</span>
+          </h3>
+          <span className="text-[10px] font-mono bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded-full">
+            Zero-Knowledge
+          </span>
+        </div>
+        <p className="text-[11px] text-slate-400 text-left leading-relaxed">
+          Chats are saved only on your device. When uninstalling the app or switching devices, export a backup to keep your conversations safe.
+        </p>
+
+        {/* Hidden File Input for Restore */}
+        <input
+          ref={backupFileInputRef}
+          type="file"
+          accept=".json"
+          onChange={handleImportBackup}
+          className="hidden"
+        />
+
+        <div className="grid grid-cols-2 gap-2 pt-1">
+          <button
+            type="button"
+            onClick={handleExportBackup}
+            disabled={isExportingBackup}
+            className="py-2.5 px-3 bg-slate-950 hover:bg-slate-800 border border-slate-800 text-xs font-medium rounded-xl flex items-center justify-center space-x-1.5 text-slate-300 hover:text-white transition-all disabled:opacity-50"
+          >
+            {isExportingBackup ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin text-rose-400" />
+            ) : (
+              <Download className="w-3.5 h-3.5 text-rose-400" />
+            )}
+            <span>Export Backup</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => backupFileInputRef.current?.click()}
+            disabled={isImportingBackup}
+            className="py-2.5 px-3 bg-slate-950 hover:bg-slate-800 border border-slate-800 text-xs font-medium rounded-xl flex items-center justify-center space-x-1.5 text-slate-300 hover:text-white transition-all disabled:opacity-50"
+          >
+            {isImportingBackup ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin text-rose-400" />
+            ) : (
+              <Upload className="w-3.5 h-3.5 text-rose-400" />
+            )}
+            <span>Restore Backup</span>
+          </button>
+        </div>
       </div>
 
       {/* Logout / Switch Account */}

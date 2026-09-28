@@ -544,6 +544,22 @@ export const api = {
     return profiles.filter((p) => blockedIds.has(p.id))
   },
 
+  async unblockUser(blockerId: string, blockedId: string): Promise<void> {
+    if (isLiveSupabaseConfigured) {
+      const { error } = await supabase
+        .from('blocks')
+        .delete()
+        .eq('blocker_id', blockerId)
+        .eq('blocked_id', blockedId)
+      if (error) throw error
+      return
+    }
+
+    const blocks = getLocalStored<BlockRecord[]>(LOCAL_STORAGE_BLOCKS, [])
+    const filtered = blocks.filter((b) => !(b.blocker_id === blockerId && b.blocked_id === blockedId))
+    setLocalStored(LOCAL_STORAGE_BLOCKS, filtered)
+  },
+
   async reportUser(reporterId: string, reportedId: string, reason: string): Promise<void> {
     if (isLiveSupabaseConfigured) {
       const { error } = await supabase
