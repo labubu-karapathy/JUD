@@ -314,7 +314,8 @@ export async function checkGitHubRepoUpdate(): Promise<GitHubUpdateInfo | null> 
         await applyGitHubUpdate(
           manifest.build_hash,
           manifest.version || '2.4.1',
-          manifest.commit_message || 'Auto-update from GitHub repository (JUD)'
+          manifest.commit_message || 'Auto-update from GitHub repository (JUD)',
+          manifest.apk_url
         )
 
         return {

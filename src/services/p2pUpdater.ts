@@ -7,8 +7,8 @@
  * ==============================================================================
  */
 
-export const CURRENT_APP_VERSION = '2.4.1'
-export const CURRENT_BUILD_HASH = 'jlb-build-2026-09-28-v2.4.1'
+export const CURRENT_APP_VERSION = '2.4.2'
+export const CURRENT_BUILD_HASH = 'jlb-build-2026-09-28-v2.4.2'
 
 export interface UpdateNotice {
   version: string
@@ -16,6 +16,7 @@ export interface UpdateNotice {
   message: string
   source: 'github_jud'
   applied: boolean
+  apkUrl?: string
 }
 
 type UpdateListener = (notice: UpdateNotice) => void
@@ -55,12 +56,13 @@ export function setLocalBuildHash(hash: string): void {
 }
 
 /**
- * Applies update from GitHub and reloads safely preserving IndexedDB
+ * Applies update from GitHub and notifies the app
  */
 export async function applyGitHubUpdate(
   buildHash: string,
   version: string,
-  message: string
+  message: string,
+  apkUrl?: string
 ): Promise<void> {
   const localHash = getLocalBuildHash()
   if (buildHash === localHash) return
@@ -85,10 +87,6 @@ export async function applyGitHubUpdate(
     message,
     source: 'github_jud',
     applied: true,
+    apkUrl: apkUrl || 'https://raw.githubusercontent.com/labubu-karapathy/JUD/main/JadavpurLoveBirds.apk',
   })
-
-  // Refresh WebView after notification
-  setTimeout(() => {
-    window.location.reload()
-  }, 2200)
 }

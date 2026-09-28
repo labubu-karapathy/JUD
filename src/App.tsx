@@ -10,7 +10,7 @@ import { SecurityLock } from './components/SecurityLock'
 import { InstallPwaBanner } from './components/InstallPwaBanner'
 import { api, type Profile, type MatchRecord, type GlobalAnnouncement } from './services/supabase'
 import { db } from './db'
-import { AlertOctagon, Radio, X, Sparkles } from 'lucide-react'
+import { AlertOctagon, Radio, X, Sparkles, Download } from 'lucide-react'
 import { onOTAUpdateNotification, type UpdateNotice } from './services/p2pUpdater'
 import { checkGitHubRepoUpdate, drainOfflineEncryptedMessages } from './services/githubRelay'
 import { GlobalCampusChatDrawer } from './components/GlobalCampusChatDrawer'
@@ -348,25 +348,38 @@ export const App: React.FC = () => {
         {/* OTA Auto-Update Live Synchronization Banner (Authenticated Users Only) */}
         {currentProfile && otaNotice && (
           <div className="bg-emerald-950/95 border-b border-emerald-500/50 px-3.5 py-2.5 flex items-center justify-between text-xs text-emerald-200 z-50 shadow-lg backdrop-blur-md animate-in slide-in-from-top duration-300">
-            <div className="flex items-center space-x-2.5 truncate">
+            <div className="flex items-center space-x-2.5 truncate mr-2">
               <div className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping shrink-0" />
               <div className="truncate">
                 <div className="font-bold text-[11px] text-emerald-300 flex items-center gap-1.5">
-                  <span>🚀 Live Campus Sync (v{otaNotice.version})</span>
+                  <span>🚀 Campus Update Available (v{otaNotice.version})</span>
                   <span className="text-[9px] bg-emerald-900/80 px-1.5 py-0.5 rounded text-emerald-400 border border-emerald-700/60 uppercase">
-                    {otaNotice.source === 'github_jud' ? 'GitHub JUD' : 'Auto-Update'}
+                    GitHub JUD
                   </span>
                 </div>
                 <p className="text-[10px] text-emerald-400/90 truncate">{otaNotice.message} • All chats preserved</p>
               </div>
             </div>
-            <button
-              type="button"
-              onClick={() => setOtaNotice(null)}
-              className="p-1 text-emerald-400 hover:text-white shrink-0 ml-2"
-            >
-              <X className="w-3.5 h-3.5" />
-            </button>
+            <div className="flex items-center gap-2 shrink-0">
+              {otaNotice.apkUrl && (
+                <a
+                  href={otaNotice.apkUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-[10px] rounded-lg shadow transition-colors flex items-center gap-1"
+                >
+                  <Download className="w-3 h-3" />
+                  <span>Update APK</span>
+                </a>
+              )}
+              <button
+                type="button"
+                onClick={() => setOtaNotice(null)}
+                className="p-1 text-emerald-400 hover:text-white shrink-0"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
           </div>
         )}
 

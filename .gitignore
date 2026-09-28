@@ -31,3 +31,5 @@ admin_desktop/dist/
 supabase/.temp/
 __pycache__/
 *.pyc
+~$*
+*.tmp
