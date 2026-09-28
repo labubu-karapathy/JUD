@@ -290,7 +290,9 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
   }
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    // Only Ctrl+Enter / Cmd+Enter sends from hardware keyboard (desktop convenience);
+    // Regular Enter on mobile virtual keyboard adds a newline as intended, since sending has a dedicated button.
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
       e.preventDefault()
       handleSendMessage()
     }
