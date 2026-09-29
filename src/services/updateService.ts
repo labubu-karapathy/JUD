@@ -27,8 +27,8 @@ import { Capacitor, registerPlugin } from '@capacitor/core'
 import { App } from '@capacitor/app'
 import { Filesystem, Directory } from '@capacitor/filesystem'
 
-export const CURRENT_APP_VERSION = '2.5.0'
-export const CURRENT_BUILD_HASH = 'jlb-build-2026-09-29-v2.5.0'
+export const CURRENT_APP_VERSION = '2.5.1'
+export const CURRENT_BUILD_HASH = 'jlb-build-2026-09-29-v2.5.1'
 
 export interface ReleaseManifest {
   version: string
@@ -68,27 +68,63 @@ const OtaUpdater = registerPlugin<OtaUpdaterPlugin>('OtaUpdater')
 const MANIFEST_CDN_URL = 'https://raw.githubusercontent.com/labubu-karapathy/JUD/main/release-manifest.json'
 
 /**
+ * Returns true if remote version string is strictly newer than local version string.
+ */
+export function isNewerVersion(remote: string, local: string): boolean {
+  if (!remote || !local) return false
+  const rClean = remote.replace(/^v/i, '')
+  const lClean = local.replace(/^v/i, '')
+  const rParts = rClean.split('.').map((p) => parseInt(p, 10) || 0)
+  const lParts = lClean.split('.').map((p) => parseInt(p, 10) || 0)
+  const len = Math.max(rParts.length, lParts.length)
+  for (let i = 0; i < len; i++) {
+    const r = rParts[i] || 0
+    const l = lParts[i] || 0
+    if (r > l) return true
+    if (r < l) return false
+  }
+  return false
+}
+
+/**
+ * Accurately determines the currently running app version:
+ * 1. Checks native OtaUpdater plugin for active OTA version
+ * 2. Checks local storage cache if available
+ * 3. Falls back to CURRENT_APP_VERSION bundled in JS
+ */
+export async function getActiveAppVersion(): Promise<string> {
+  if (Capacitor.isNativePlatform()) {
+    try {
+      const otaInfo = await OtaUpdater.getActiveVersion()
+      if (otaInfo && otaInfo.version && otaInfo.version !== 'bundled') {
+        return otaInfo.version
+      }
+    } catch (err) {
+      console.warn('[UpdateService] Could not read native OTA version:', err)
+    }
+  }
+  const cachedOtaVersion = localStorage.getItem('jlb_active_ota_version')
+  if (cachedOtaVersion) {
+    return cachedOtaVersion
+  }
+  return CURRENT_APP_VERSION
+}
+
+/**
  * Checks GitHub raw CDN for the latest release manifest.
  * Zero tokens, zero API rate-limits, completely public.
  */
 export async function checkForUpdate(): Promise<UpdateCheckResult> {
   try {
-    let currentVersion = CURRENT_APP_VERSION
-    let currentVersionCode = 20404
+    let currentVersion = await getActiveAppVersion()
+    let currentVersionCode = 20405
 
     if (Capacitor.isNativePlatform()) {
       try {
         const appInfo = await App.getInfo()
-        currentVersion = appInfo.version || currentVersion
         currentVersionCode = parseInt(appInfo.build, 10) || currentVersionCode
-
-        // Check if there is an active OTA version running
-        const otaInfo = await OtaUpdater.getActiveVersion()
-        if (otaInfo && otaInfo.version && otaInfo.version !== 'bundled') {
-          currentVersion = otaInfo.version
-        }
       } catch (err) {
-        console.warn('[UpdateService] Could not read native app/OTA info:', err)
+        console.warn('[UpdateService] Could not read native appInfo:', err)
       }
     }
 
@@ -112,10 +148,21 @@ export async function checkForUpdate(): Promise<UpdateCheckResult> {
     const minNative = manifest.minNativeVersionCode || 0
     const isOtaAvailable = Boolean(manifest.webBundleUrl && currentVersionCode >= minNative)
 
-    // Check if an update is available
-    const hasUpdate = isOtaAvailable
-      ? (manifest.version !== currentVersion && manifest.build_hash !== localStorage.getItem('jlb_local_build_hash'))
-      : remoteCode > currentVersionCode
+    // Check if an update is available:
+    // 1. If remote version is newer than current running version (e.g. 2.5.1 > 2.5.0)
+    // 2. OR remote version differs and remote build_hash differs from local build hash
+    // 3. OR remote native versionCode is strictly greater than current versionCode
+    const localHash = localStorage.getItem('jlb_local_build_hash') || CURRENT_BUILD_HASH
+    const versionIsNewer = isNewerVersion(manifest.version, currentVersion)
+    const versionDiffers = manifest.version !== currentVersion
+    const hashDiffers = manifest.build_hash ? manifest.build_hash !== localHash : false
+
+    let hasUpdate = false
+    if (isOtaAvailable) {
+      hasUpdate = versionIsNewer || (versionDiffers && hashDiffers)
+    } else {
+      hasUpdate = remoteCode > currentVersionCode || versionIsNewer
+    }
 
     return {
       hasUpdate,
@@ -130,7 +177,7 @@ export async function checkForUpdate(): Promise<UpdateCheckResult> {
       hasUpdate: false,
       isOtaAvailable: false,
       currentVersion: CURRENT_APP_VERSION,
-      currentVersionCode: 20403,
+      currentVersionCode: 20405,
       remoteManifest: null,
     }
   }
@@ -144,14 +191,44 @@ export async function applyOtaUpdate(
   webBundleUrl: string,
   version: string
 ): Promise<void> {
+  // Purge any registered service worker or Workbox CacheStorage to avoid stale assets
+  if (typeof window !== 'undefined') {
+    if ('serviceWorker' in navigator) {
+      try {
+        const registrations = await navigator.serviceWorker.getRegistrations()
+        for (const reg of registrations) {
+          await reg.unregister()
+        }
+      } catch (e) {
+        console.warn('SW unregister error:', e)
+      }
+    }
+    if ('caches' in window) {
+      try {
+        const keys = await caches.keys()
+        for (const key of keys) {
+          await caches.delete(key)
+        }
+      } catch (e) {
+        console.warn('Cache purge error:', e)
+      }
+    }
+  }
+
   if (!Capacitor.isNativePlatform()) {
+    localStorage.setItem('jlb_active_ota_version', version)
+    localStorage.setItem('jlb_local_build_hash', `jlb-build-${version}`)
     window.location.reload()
     return
   }
 
   const result = await OtaUpdater.downloadAndApply({ url: webBundleUrl, version })
   if (result.success) {
-    localStorage.setItem('jlb_local_build_hash', `jlb-ota-${version}`)
+    localStorage.setItem('jlb_local_build_hash', `jlb-build-${version}`)
+    localStorage.setItem('jlb_active_ota_version', version)
+    setTimeout(() => {
+      window.location.reload()
+    }, 600)
   }
 }
 

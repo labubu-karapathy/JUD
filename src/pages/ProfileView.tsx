@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react'
+import React, { useState, useRef, useEffect } from 'react'
 import {
   User,
   ShieldCheck,
@@ -29,6 +29,7 @@ import {
   checkForUpdate,
   applyOtaUpdate,
   downloadAndInstallUpdate,
+  getActiveAppVersion,
   CURRENT_APP_VERSION,
 } from '../services/updateService'
 
@@ -101,7 +102,8 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   // Transient Toast Feedback
   const [toastMessage, setToastMessage] = useState<string>('')
 
-  // OTA Updates State
+  // OTA Updates State & Dynamic Running Version Badge
+  const [activeDisplayVersion, setActiveDisplayVersion] = useState<string>(CURRENT_APP_VERSION)
   const [isCheckingUpdate, setIsCheckingUpdate] = useState<boolean>(false)
   const [updateInfo, setUpdateInfo] = useState<{
     available: boolean
@@ -111,6 +113,13 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
     directApkUrl?: string
   } | null>(null)
   const [isUpdating, setIsUpdating] = useState<boolean>(false)
+
+  // Synchronize actual running version on mount
+  useEffect(() => {
+    getActiveAppVersion().then((ver) => {
+      if (ver) setActiveDisplayVersion(ver)
+    })
+  }, [])
 
   // Local Chat Backup & Restore State
   const backupFileInputRef = useRef<HTMLInputElement>(null)
@@ -129,6 +138,9 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   const handleCheckForUpdates = async () => {
     setIsCheckingUpdate(true)
     try {
+      const liveVer = await getActiveAppVersion()
+      if (liveVer) setActiveDisplayVersion(liveVer)
+
       const result = await checkForUpdate()
       if (result.hasUpdate && result.remoteManifest) {
         setUpdateInfo({
@@ -141,7 +153,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
         showToast(`Update v${result.remoteManifest.version} is available!`)
       } else {
         setUpdateInfo({ available: false })
-        showToast('App is up to date!')
+        showToast(`App is up to date (v${liveVer || activeDisplayVersion})!`)
       }
     } catch (err: any) {
       console.error('Update check error:', err)
@@ -156,10 +168,12 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
     if (!updateInfo?.available) return
     setIsUpdating(true)
     try {
-      showToast('Downloading and installing update...')
+      showToast('Downloading and applying update...')
       const result = await checkForUpdate()
       if (result.isOtaAvailable && result.remoteManifest?.webBundleUrl) {
         await applyOtaUpdate(result.remoteManifest.webBundleUrl, result.remoteManifest.version)
+        showToast(`Update v${result.remoteManifest.version} applied! Reloading...`)
+        setActiveDisplayVersion(result.remoteManifest.version)
       } else if (result.remoteManifest?.downloadUrl) {
         await downloadAndInstallUpdate(result.remoteManifest.downloadUrl)
       }
@@ -626,7 +640,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
             <span>App Updates (Zero-Cost OTA)</span>
           </h3>
           <span className="text-[10px] font-mono bg-rose-500/10 border border-rose-500/20 text-rose-300 px-2 py-0.5 rounded-full">
-            v{CURRENT_APP_VERSION}
+            v{activeDisplayVersion}
           </span>
         </div>
         <p className="text-[11px] text-slate-400 text-left leading-relaxed">
@@ -678,7 +692,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
         ) : updateInfo && !updateInfo.available ? (
           <div className="p-2.5 bg-emerald-950/40 border border-emerald-800/50 rounded-xl flex items-center space-x-2 text-emerald-300 text-xs">
             <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-            <span>You are on the latest version (v{CURRENT_APP_VERSION}).</span>
+            <span>You are on the latest version (v{activeDisplayVersion}).</span>
           </div>
         ) : null}
 

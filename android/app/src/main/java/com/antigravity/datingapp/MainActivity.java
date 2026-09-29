@@ -149,7 +149,20 @@ class OtaUpdaterPlugin extends Plugin {
                     .apply();
 
                 getActivity().runOnUiThread(() -> {
+                    try {
+                        if (getBridge() != null && getBridge().getWebView() != null) {
+                            getBridge().getWebView().clearCache(true);
+                        }
+                    } catch (Exception ignored) {}
+
                     getBridge().setServerBasePath(finalTargetDir.getAbsolutePath());
+
+                    if (getBridge() != null && getBridge().getWebView() != null) {
+                        getBridge().getWebView().post(() -> {
+                            getBridge().getWebView().reload();
+                        });
+                    }
+
                     JSObject ret = new JSObject();
                     ret.put("success", true);
                     ret.put("version", finalVersion);
@@ -171,7 +184,17 @@ class OtaUpdaterPlugin extends Plugin {
         SharedPreferences prefs = getContext().getSharedPreferences(PREFS_NAME, Activity.MODE_PRIVATE);
         prefs.edit().remove(PREF_SERVER_PATH).remove(PREF_OTA_VERSION).apply();
         getActivity().runOnUiThread(() -> {
+            try {
+                if (getBridge() != null && getBridge().getWebView() != null) {
+                    getBridge().getWebView().clearCache(true);
+                }
+            } catch (Exception ignored) {}
             getBridge().setServerAssetPath("public");
+            if (getBridge() != null && getBridge().getWebView() != null) {
+                getBridge().getWebView().post(() -> {
+                    getBridge().getWebView().reload();
+                });
+            }
             call.resolve();
         });
     }
@@ -228,6 +251,20 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(OtaUpdaterPlugin.class);
         super.onCreate(savedInstanceState);
         getWindow().setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE);
+
+        // Restore OTA base path on cold start if an update was previously applied
+        try {
+            SharedPreferences prefs = getSharedPreferences(OtaUpdaterPlugin.PREFS_NAME, Activity.MODE_PRIVATE);
+            String savedPath = prefs.getString(OtaUpdaterPlugin.PREF_SERVER_PATH, null);
+            if (savedPath != null && !savedPath.trim().isEmpty()) {
+                File indexFile = new File(savedPath, "index.html");
+                if (indexFile.exists() && this.bridge != null) {
+                    this.bridge.setServerBasePath(savedPath);
+                }
+            }
+        } catch (Exception e) {
+            android.util.Log.e("MainActivity", "Failed to restore OTA serverBasePath", e);
+        }
 
         // Native Android Navigation Bar & Gesture Back Interceptor
         getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {

@@ -3,6 +3,11 @@ import zipfile
 
 dist_dir = os.path.abspath('dist')
 zip_path = os.path.abspath('web-dist.zip')
+sw_src = os.path.abspath('public/sw.js')
+sw_dest = os.path.join(dist_dir, 'sw.js')
+if os.path.exists(sw_src):
+    import shutil
+    shutil.copyfile(sw_src, sw_dest)
 
 print(f"Packing {dist_dir} into {zip_path}...")
 with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as z:
