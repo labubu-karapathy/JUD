@@ -106,9 +106,6 @@ class OtaUpdaterPlugin extends Plugin {
                 conn.setInstanceFollowRedirects(true);
 
                 String token = call.getString("token");
-                if (token == null || token.trim().isEmpty()) {
-                    token = "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";
-                }
                 if (token != null && !token.trim().isEmpty()) {
                     conn.setRequestProperty("Authorization", "token " + token.trim());
                 }

@@ -265,5 +265,68 @@ export async function getPermanentMatchesAsync(userId: string): Promise<any[]> {
   } catch (e) {
     console.warn('Failed to load matches from IndexedDB:', e)
   }
-  return getPermanentMatches(userId)
+
+  const local = getPermanentMatches(userId)
+  if (local && local.length > 0) {
+    return local
+  }
+
+  // Deep offline fallback: Reconstruct active conversations from local_messages & cached_profiles
+  try {
+    const allMsgs = await db.local_messages.toArray()
+    if (allMsgs.length > 0) {
+      const matchMap = new Map<string, { partnerId: string; lastTimestamp: number }>()
+      for (const msg of allMsgs) {
+        if (!msg.matchId) continue
+        const existing = matchMap.get(msg.matchId)
+        const partnerId = msg.senderId !== userId ? msg.senderId : existing?.partnerId || ''
+        const timestamp = msg.timestamp || 0
+        if (!existing || timestamp > existing.lastTimestamp || (partnerId && !existing.partnerId)) {
+          matchMap.set(msg.matchId, {
+            partnerId: partnerId || existing?.partnerId || '',
+            lastTimestamp: Math.max(timestamp, existing?.lastTimestamp || 0),
+          })
+        }
+      }
+
+      const reconstructed: any[] = []
+      for (const [matchId, meta] of matchMap.entries()) {
+        let partner: any = null
+        if (meta.partnerId) {
+          partner = await db.cached_profiles.get(meta.partnerId)
+        }
+        if (!partner) {
+          partner = {
+            id: meta.partnerId || 'partner_' + matchId,
+            full_name: 'Campus Match',
+            gender: 'female',
+            age: 20,
+            bio: '',
+            insta_handle: '@jadavpurian',
+            photo_urls: [],
+            report_count: 0,
+            block_count: 0,
+            is_verified: true,
+          }
+        }
+        reconstructed.push({
+          id: matchId,
+          female_id: partner.gender === 'female' ? partner.id : userId,
+          male_id: partner.gender === 'male' ? partner.id : userId,
+          has_female_initiated: true,
+          media_allowed: true,
+          partner,
+        })
+      }
+
+      if (reconstructed.length > 0) {
+        savePermanentMatches(userId, reconstructed)
+        return reconstructed
+      }
+    }
+  } catch (err) {
+    console.warn('Failed to reconstruct matches from local messages:', err)
+  }
+
+  return []
 }

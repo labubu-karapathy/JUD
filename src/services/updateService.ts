@@ -27,8 +27,8 @@ import { Capacitor, registerPlugin } from '@capacitor/core'
 import { App } from '@capacitor/app'
 import { Filesystem, Directory } from '@capacitor/filesystem'
 
-export const CURRENT_APP_VERSION = '2.5.2'
-export const CURRENT_BUILD_HASH = 'jlb-build-2026-09-29-v2.5.2'
+export const CURRENT_APP_VERSION = '2.5.3'
+export const CURRENT_BUILD_HASH = 'jlb-build-2026-09-30-v2.5.3'
 
 export interface ReleaseManifest {
   version: string
@@ -65,7 +65,7 @@ interface OtaUpdaterPlugin {
 const AppInstaller = registerPlugin<AppInstallerPlugin>('AppInstaller')
 const OtaUpdater = registerPlugin<OtaUpdaterPlugin>('OtaUpdater')
 
-export const GITHUB_ACCESS_TOKEN = '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'
+export const GITHUB_ACCESS_TOKEN = ''
 const MANIFEST_CDN_URL = 'https://raw.githubusercontent.com/labubu-karapathy/JUD/main/release-manifest.json'
 
 /**

@@ -1,4 +1,5 @@
 import { createClient, type RealtimeChannel, type SupabaseClient } from '@supabase/supabase-js'
+import { db, getPermanentMatchesAsync, savePermanentMatches } from '../db'
 
 export interface Profile {
   id: string
@@ -208,19 +209,45 @@ export const api = {
   // Profiles
   async getProfile(userId: string): Promise<Profile | null> {
     if (isLiveSupabaseConfigured) {
-      const { data, error } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', userId)
-        .single()
-      if (error && error.code !== 'PGRST116') {
-        console.error('Error getting profile:', error)
+      try {
+        const { data, error } = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('id', userId)
+          .single()
+        if (error) {
+          if (error.code !== 'PGRST116') {
+            console.error('Error getting profile:', error)
+          }
+          return this.getOfflineProfile(userId)
+        }
+        if (data) {
+          try {
+            localStorage.setItem('jud_saved_device_profile', JSON.stringify(data))
+            db.cached_profiles.put(data).catch(() => {})
+          } catch {}
+          return data
+        }
+        return null
+      } catch (err) {
+        console.warn('Network error in getProfile, falling back to offline profile:', err)
+        return this.getOfflineProfile(userId)
       }
-      return data || null
     }
 
     const profiles = getLocalStored<Profile[]>(LOCAL_STORAGE_PROFILES, DEFAULT_SEED_PROFILES)
     return profiles.find((p) => p.id === userId) || null
+  },
+
+  getOfflineProfile(userId: string): Profile | null {
+    try {
+      const localSaved = localStorage.getItem('jud_saved_device_profile')
+      if (localSaved) {
+        const parsed = JSON.parse(localSaved)
+        if (parsed && (parsed.id === userId || !userId)) return parsed
+      }
+    } catch {}
+    return null
   },
 
   async checkExistingStudent(libraryCard: string, instaHandle: string): Promise<Profile | null> {
@@ -360,28 +387,42 @@ export const api = {
   // Matches
   async fetchMatches(currentUserId: string): Promise<MatchRecord[]> {
     if (isLiveSupabaseConfigured) {
-      const { data, error } = await supabase
-        .from('matches')
-        .select(`
-          *,
-          female:female_id(id, full_name, gender, age, bio, insta_handle, photo_urls, report_count, block_count, is_verified, is_deactivated, active_chat_count),
-          male:male_id(id, full_name, gender, age, bio, insta_handle, photo_urls, report_count, block_count, is_verified, is_deactivated, active_chat_count)
-        `)
-        .or(`female_id.eq.${currentUserId},male_id.eq.${currentUserId}`)
+      try {
+        const { data, error } = await supabase
+          .from('matches')
+          .select(`
+            *,
+            female:female_id(id, full_name, gender, age, bio, insta_handle, photo_urls, report_count, block_count, is_verified, is_deactivated, active_chat_count),
+            male:male_id(id, full_name, gender, age, bio, insta_handle, photo_urls, report_count, block_count, is_verified, is_deactivated, active_chat_count)
+          `)
+          .or(`female_id.eq.${currentUserId},male_id.eq.${currentUserId}`)
 
-      if (error) throw error
-      return (data || []).map((row: any) => {
-        const partner = row.female_id === currentUserId ? row.male : row.female
-        return {
-          id: row.id,
-          female_id: row.female_id,
-          male_id: row.male_id,
-          has_female_initiated: row.has_female_initiated,
-          media_allowed: row.media_allowed,
-          matched_at: row.matched_at,
-          partner,
+        if (error) throw error
+        const result: MatchRecord[] = (data || []).map((row: any) => {
+          const partner = row.female_id === currentUserId ? row.male : row.female
+          if (partner && partner.id) {
+            db.cached_profiles.put(partner).catch(() => {})
+          }
+          return {
+            id: row.id,
+            female_id: row.female_id,
+            male_id: row.male_id,
+            has_female_initiated: row.has_female_initiated,
+            media_allowed: row.media_allowed,
+            matched_at: row.matched_at,
+            partner,
+          }
+        })
+
+        if (result.length > 0) {
+          savePermanentMatches(currentUserId, result)
         }
-      })
+        return result
+      } catch (networkErr) {
+        console.warn('fetchMatches network error, loading from local offline storage:', networkErr)
+        const offlineMatches = await getPermanentMatchesAsync(currentUserId)
+        return offlineMatches
+      }
     }
 
     const matches = getLocalStored<MatchRecord[]>(LOCAL_STORAGE_MATCHES, [])

@@ -98,20 +98,25 @@ export const Matches: React.FC<MatchesProps> = ({
       }
       try {
         const remoteList = await api.fetchMatches(currentProfile.id)
-        const enriched = await enrichWithLocalMessages(remoteList)
-
-        setMatches(enriched)
-        // Save directly to permanent device storage and IndexedDB
-        savePermanentMatches(currentProfile.id, enriched)
+        if (remoteList && remoteList.length > 0) {
+          const enriched = await enrichWithLocalMessages(remoteList)
+          setMatches(enriched)
+          // Save directly to permanent device storage and IndexedDB
+          savePermanentMatches(currentProfile.id, enriched)
+        } else {
+          // Retain on-device local matches if remote returns empty (e.g. offline fallback)
+          await refreshFromLocalDatabase()
+        }
       } catch (err) {
         console.warn('Network sync for connections postponed/offline:', err)
+        await refreshFromLocalDatabase()
       } finally {
         if (isManual) {
           setIsManualRefreshing(false)
         }
       }
     },
-    [currentProfile.id, enrichWithLocalMessages]
+    [currentProfile.id, enrichWithLocalMessages, refreshFromLocalDatabase]
   )
 
   // On mount: immediate local enrich + silent background sync

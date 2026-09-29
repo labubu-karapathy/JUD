@@ -99,15 +99,21 @@ export const App: React.FC = () => {
             await db.cached_profiles.clear()
             setCurrentProfile(null)
           } else {
-            // Verify session with remote Supabase
-            const remote = await api.getProfile(storedUserId)
-            if (remote) {
-              setCurrentProfile(remote)
+            // Verify session with remote Supabase or fallback to on-device profile
+            const profile = await api.getProfile(storedUserId)
+            if (profile) {
+              setCurrentProfile(profile)
             } else {
-              // Remote profile was deleted/purged on server
-              localStorage.removeItem('jud_current_user_id')
-              await db.cached_profiles.clear()
-              setCurrentProfile(null)
+              // Try reading offline saved profile before assuming deleted
+              const offline = api.getOfflineProfile(storedUserId)
+              if (offline) {
+                setCurrentProfile(offline)
+              } else if (navigator.onLine) {
+                // Only wipe if strictly ONLINE and server confirmed profile does not exist
+                localStorage.removeItem('jud_current_user_id')
+                await db.cached_profiles.clear()
+                setCurrentProfile(null)
+              }
             }
           }
         }
