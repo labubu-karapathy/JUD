@@ -192,3 +192,23 @@ export class AppLocalDatabase extends Dexie {
 }
 
 export const db = new AppLocalDatabase()
+
+// --- Permanent On-Device Match Cache Utilities ---
+const PERMANENT_MATCHES_PREFIX = 'jud_permanent_matches_'
+
+export function getPermanentMatches(userId: string): any[] {
+  try {
+    const raw = localStorage.getItem(PERMANENT_MATCHES_PREFIX + userId)
+    return raw ? JSON.parse(raw) : []
+  } catch {
+    return []
+  }
+}
+
+export function savePermanentMatches(userId: string, matches: any[]): void {
+  try {
+    localStorage.setItem(PERMANENT_MATCHES_PREFIX + userId, JSON.stringify(matches))
+  } catch (e) {
+    console.warn('Failed to save permanent matches cache:', e)
+  }
+}

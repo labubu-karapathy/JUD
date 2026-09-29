@@ -20,7 +20,7 @@ import {
 import { ProfileCard } from '../components/ProfileCard'
 import { ReportModal } from '../components/ReportModal'
 import { api, type Profile, type ChatRequest, type MatchRecord } from '../services/supabase'
-import { db, type CachedProfile } from '../db'
+import { db, type CachedProfile, getPermanentMatches, savePermanentMatches } from '../db'
 import { backButtonService } from '../services/backButtonService'
 
 interface DiscoverProps {
@@ -47,8 +47,10 @@ export const Discover: React.FC<DiscoverProps> = ({
   const [chatRequests, setChatRequests] = useState<ChatRequest[]>([])
   const [isRequestsDrawerOpen, setIsRequestsDrawerOpen] = useState<boolean>(false)
 
-  // Matches and Blocks state
-  const [userMatches, setUserMatches] = useState<MatchRecord[]>([])
+  // Matches and Blocks state (initialized instantly from permanent cache)
+  const [userMatches, setUserMatches] = useState<MatchRecord[]>(() =>
+    getPermanentMatches(currentProfile.id)
+  )
   const [blockedUserIds, setBlockedUserIds] = useState<Set<string>>(new Set())
 
   // Crossed / Passed Profiles state (persisted locally per user)
@@ -107,6 +109,7 @@ export const Discover: React.FC<DiscoverProps> = ({
       ])
       setUserMatches(matches)
       setBlockedUserIds(new Set(blocked.map((b) => b.id)))
+      savePermanentMatches(currentProfile.id, matches)
     } catch (e) {
       console.error('Failed to load matches and blocks:', e)
     }

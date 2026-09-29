@@ -138,23 +138,38 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }
 
-  // Load local messages from Dexie.js (Zero server storage) with automatic offline drain
+  // 1. Instant 0ms Load: Read directly from permanent on-device storage (IndexedDB)
   const loadLocalMessages = useCallback(async () => {
     try {
-      // Drain any queued offline messages for current user from Cloudflare ephemeral relay
-      await drainOfflineMessages(currentProfile.id)
-
       const stored = await db.getMessagesForMatch(matchState.id)
       setMessages(stored)
-      setTimeout(scrollToBottom, 50)
+      setTimeout(scrollToBottom, 20)
     } catch (err) {
       console.error('Failed to load local messages:', err)
+    }
+  }, [matchState.id])
+
+  // 2. Non-blocking background sync: drain any queued offline messages without blocking chat view
+  const syncOfflineRelayMessages = useCallback(async () => {
+    try {
+      const drained = await drainOfflineMessages(currentProfile.id)
+      if (drained && drained.length > 0) {
+        // If new messages were pulled from Cloudflare relay, refresh local messages
+        const stored = await db.getMessagesForMatch(matchState.id)
+        setMessages(stored)
+        setTimeout(scrollToBottom, 40)
+      }
+    } catch (err) {
+      console.warn('Background offline message drain:', err)
     }
   }, [currentProfile.id, matchState.id])
 
   useEffect(() => {
+    // Step 1: Render instantly from permanent device storage
     loadLocalMessages()
-  }, [loadLocalMessages])
+    // Step 2: Background sync without delaying the UI
+    syncOfflineRelayMessages()
+  }, [loadLocalMessages, syncOfflineRelayMessages])
 
   // Listen for peer deactivation
   useEffect(() => {

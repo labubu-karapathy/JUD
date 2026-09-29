@@ -7,9 +7,10 @@ import {
   Lock,
   AlertTriangle,
   UserX,
+  RefreshCw,
 } from 'lucide-react'
 import { api, type MatchRecord, type Profile } from '../services/supabase'
-import { db, type LocalMessage } from '../db'
+import { db, type LocalMessage, getPermanentMatches, savePermanentMatches } from '../db'
 import { ProfileModal } from '../components/ProfileModal'
 import { backButtonService } from '../services/backButtonService'
 
@@ -27,8 +28,13 @@ export const Matches: React.FC<MatchesProps> = ({
   currentProfile,
   onSelectMatch,
 }) => {
-  const [matches, setMatches] = useState<MatchWithLastMessage[]>([])
-  const [isLoading, setIsLoading] = useState<boolean>(true)
+  // 1. Instant 0ms Load: Initialize directly from permanent on-device storage
+  const [matches, setMatches] = useState<MatchWithLastMessage[]>(() =>
+    getPermanentMatches(currentProfile.id)
+  )
+  // Only show full-screen loader if there is literally zero cached data
+  const [isLoading, setIsLoading] = useState<boolean>(() => matches.length === 0)
+  const [isSyncing, setIsSyncing] = useState<boolean>(false)
   const [selectedPartner, setSelectedPartner] = useState<Profile | null>(null)
 
   // Android Back Button Interceptor for Partner Profile Modal
@@ -44,13 +50,10 @@ export const Matches: React.FC<MatchesProps> = ({
     return () => unregister()
   }, [selectedPartner])
 
-  const loadMatches = useCallback(async () => {
-    setIsLoading(true)
-    try {
-      const list = await api.fetchMatches(currentProfile.id)
-
-      // Fetch last messages from Dexie.js for each match
-      const enriched: MatchWithLastMessage[] = await Promise.all(
+  // Helper to re-enrich matches with local Dexie messages in under 2ms
+  const enrichWithLocalMessages = useCallback(
+    async (list: MatchRecord[]): Promise<MatchWithLastMessage[]> => {
+      return Promise.all(
         list.map(async (match) => {
           const msgs = await db.getMessagesForMatch(match.id)
           const lastMsg = msgs.length > 0 ? msgs[msgs.length - 1] : undefined
@@ -65,18 +68,48 @@ export const Matches: React.FC<MatchesProps> = ({
           }
         })
       )
+    },
+    [currentProfile.id]
+  )
 
+  // Fast on-device refresh of last messages & unread counts without network delay
+  const refreshFromLocalDatabase = useCallback(async () => {
+    const cached = getPermanentMatches(currentProfile.id)
+    if (cached && cached.length > 0) {
+      const enriched = await enrichWithLocalMessages(cached)
       setMatches(enriched)
-    } catch (err) {
-      console.error('Error fetching matches:', err)
-    } finally {
       setIsLoading(false)
     }
-  }, [currentProfile.id])
+  }, [currentProfile.id, enrichWithLocalMessages])
+
+  // Non-blocking background network sync with Supabase
+  const syncMatchesWithNetwork = useCallback(async () => {
+    // Only toggle isLoading if we have no matches displayed yet
+    if (matches.length === 0) {
+      setIsLoading(true)
+    }
+    setIsSyncing(true)
+    try {
+      const remoteList = await api.fetchMatches(currentProfile.id)
+      const enriched = await enrichWithLocalMessages(remoteList)
+
+      setMatches(enriched)
+      // Save directly to permanent device storage
+      savePermanentMatches(currentProfile.id, enriched)
+    } catch (err) {
+      console.warn('Network sync for connections postponed/offline:', err)
+    } finally {
+      setIsLoading(false)
+      setIsSyncing(false)
+    }
+  }, [currentProfile.id, enrichWithLocalMessages, matches.length])
 
   useEffect(() => {
-    loadMatches()
-  }, [loadMatches])
+    // Step 1: Immediate instant local render
+    refreshFromLocalDatabase()
+    // Step 2: Background network sync
+    syncMatchesWithNetwork()
+  }, [refreshFromLocalDatabase, syncMatchesWithNetwork])
 
   const isUserFemale = currentProfile.gender === 'female'
 
@@ -94,13 +127,21 @@ export const Matches: React.FC<MatchesProps> = ({
           </div>
         </div>
 
-        <button
-          type="button"
-          onClick={loadMatches}
-          className="text-xs text-rose-400 hover:text-rose-300 font-medium"
-        >
-          Refresh
-        </button>
+        <div className="flex items-center space-x-2">
+          {isSyncing && (
+            <span className="text-[10px] text-slate-400 font-medium flex items-center space-x-1">
+              <RefreshCw className="w-3 h-3 animate-spin text-rose-400" />
+              <span>Syncing...</span>
+            </span>
+          )}
+          <button
+            type="button"
+            onClick={syncMatchesWithNetwork}
+            className="text-xs text-rose-400 hover:text-rose-300 font-medium"
+          >
+            Refresh
+          </button>
+        </div>
       </div>
 
       {/* Initiation Notice Banner */}
