@@ -10,13 +10,20 @@ import {
   RefreshCw,
 } from 'lucide-react'
 import { api, type MatchRecord, type Profile } from '../services/supabase'
-import { db, type LocalMessage, getPermanentMatches, savePermanentMatches } from '../db'
+import {
+  db,
+  type LocalMessage,
+  getPermanentMatches,
+  getPermanentMatchesAsync,
+  savePermanentMatches,
+} from '../db'
 import { ProfileModal } from '../components/ProfileModal'
 import { backButtonService } from '../services/backButtonService'
 
 interface MatchesProps {
   currentProfile: Profile
   onSelectMatch: (match: MatchRecord) => void
+  isActive?: boolean
 }
 
 interface MatchWithLastMessage extends MatchRecord {
@@ -27,14 +34,13 @@ interface MatchWithLastMessage extends MatchRecord {
 export const Matches: React.FC<MatchesProps> = ({
   currentProfile,
   onSelectMatch,
+  isActive = true,
 }) => {
   // 1. Instant 0ms Load: Initialize directly from permanent on-device storage
   const [matches, setMatches] = useState<MatchWithLastMessage[]>(() =>
     getPermanentMatches(currentProfile.id)
   )
-  // Only show full-screen loader if there is literally zero cached data
-  const [isLoading, setIsLoading] = useState<boolean>(() => matches.length === 0)
-  const [isSyncing, setIsSyncing] = useState<boolean>(false)
+  const [isManualRefreshing, setIsManualRefreshing] = useState<boolean>(false)
   const [selectedPartner, setSelectedPartner] = useState<Profile | null>(null)
 
   // Android Back Button Interceptor for Partner Profile Modal
@@ -74,42 +80,63 @@ export const Matches: React.FC<MatchesProps> = ({
 
   // Fast on-device refresh of last messages & unread counts without network delay
   const refreshFromLocalDatabase = useCallback(async () => {
-    const cached = getPermanentMatches(currentProfile.id)
+    let cached = getPermanentMatches(currentProfile.id)
+    if (!cached || cached.length === 0) {
+      cached = await getPermanentMatchesAsync(currentProfile.id)
+    }
     if (cached && cached.length > 0) {
       const enriched = await enrichWithLocalMessages(cached)
       setMatches(enriched)
-      setIsLoading(false)
     }
   }, [currentProfile.id, enrichWithLocalMessages])
 
-  // Non-blocking background network sync with Supabase
-  const syncMatchesWithNetwork = useCallback(async () => {
-    // Only toggle isLoading if we have no matches displayed yet
-    if (matches.length === 0) {
-      setIsLoading(true)
-    }
-    setIsSyncing(true)
-    try {
-      const remoteList = await api.fetchMatches(currentProfile.id)
-      const enriched = await enrichWithLocalMessages(remoteList)
+  // Non-blocking silent background network sync with Supabase
+  const syncMatchesWithNetwork = useCallback(
+    async (isManual = false) => {
+      if (isManual) {
+        setIsManualRefreshing(true)
+      }
+      try {
+        const remoteList = await api.fetchMatches(currentProfile.id)
+        const enriched = await enrichWithLocalMessages(remoteList)
 
-      setMatches(enriched)
-      // Save directly to permanent device storage
-      savePermanentMatches(currentProfile.id, enriched)
-    } catch (err) {
-      console.warn('Network sync for connections postponed/offline:', err)
-    } finally {
-      setIsLoading(false)
-      setIsSyncing(false)
-    }
-  }, [currentProfile.id, enrichWithLocalMessages, matches.length])
+        setMatches(enriched)
+        // Save directly to permanent device storage and IndexedDB
+        savePermanentMatches(currentProfile.id, enriched)
+      } catch (err) {
+        console.warn('Network sync for connections postponed/offline:', err)
+      } finally {
+        if (isManual) {
+          setIsManualRefreshing(false)
+        }
+      }
+    },
+    [currentProfile.id, enrichWithLocalMessages]
+  )
 
+  // On mount: immediate local enrich + silent background sync
   useEffect(() => {
-    // Step 1: Immediate instant local render
     refreshFromLocalDatabase()
-    // Step 2: Background network sync
-    syncMatchesWithNetwork()
+    syncMatchesWithNetwork(false)
   }, [refreshFromLocalDatabase, syncMatchesWithNetwork])
+
+  // When tab becomes active or when switching back: refresh local messages (0ms, no network)
+  useEffect(() => {
+    if (isActive) {
+      refreshFromLocalDatabase()
+    }
+  }, [isActive, refreshFromLocalDatabase])
+
+  // Event listener: update message preview & unread badge when local messages change
+  useEffect(() => {
+    const handleMessagesChanged = () => {
+      refreshFromLocalDatabase()
+    }
+    window.addEventListener('jlb_local_messages_updated', handleMessagesChanged)
+    return () => {
+      window.removeEventListener('jlb_local_messages_updated', handleMessagesChanged)
+    }
+  }, [refreshFromLocalDatabase])
 
   const isUserFemale = currentProfile.gender === 'female'
 
@@ -127,21 +154,15 @@ export const Matches: React.FC<MatchesProps> = ({
           </div>
         </div>
 
-        <div className="flex items-center space-x-2">
-          {isSyncing && (
-            <span className="text-[10px] text-slate-400 font-medium flex items-center space-x-1">
-              <RefreshCw className="w-3 h-3 animate-spin text-rose-400" />
-              <span>Syncing...</span>
-            </span>
-          )}
-          <button
-            type="button"
-            onClick={syncMatchesWithNetwork}
-            className="text-xs text-rose-400 hover:text-rose-300 font-medium"
-          >
-            Refresh
-          </button>
-        </div>
+        <button
+          type="button"
+          onClick={() => syncMatchesWithNetwork(true)}
+          disabled={isManualRefreshing}
+          className="flex items-center space-x-1.5 text-xs text-rose-400 hover:text-rose-300 font-medium px-2 py-1 rounded-lg hover:bg-rose-500/10 transition-colors disabled:opacity-50"
+        >
+          <RefreshCw className={`w-3.5 h-3.5 ${isManualRefreshing ? 'animate-spin text-rose-400' : ''}`} />
+          <span>{isManualRefreshing ? 'Syncing...' : 'Refresh'}</span>
+        </button>
       </div>
 
       {/* Initiation Notice Banner */}
@@ -161,12 +182,7 @@ export const Matches: React.FC<MatchesProps> = ({
 
       {/* Matches List */}
       <div className="flex-1 overflow-y-auto space-y-2.5 pr-0.5">
-        {isLoading ? (
-          <div className="flex flex-col items-center justify-center py-20 space-y-2 text-slate-500">
-            <div className="w-6 h-6 border-2 border-rose-500 border-t-transparent rounded-full animate-spin" />
-            <span className="text-xs">Loading campus matches...</span>
-          </div>
-        ) : matches.length === 0 ? (
+        {matches.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-16 text-center space-y-3 bg-slate-900/40 rounded-2xl border border-slate-800 p-6">
             <div className="w-12 h-12 rounded-2xl bg-slate-800 flex items-center justify-center text-slate-500">
               <MessageCircle className="w-6 h-6" />

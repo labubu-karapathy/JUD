@@ -39,9 +39,18 @@ export interface LocalMessage {
   viewOnceStatus?: 'unopened' | 'opened'
 }
 
+export interface CachedMatchEntry {
+  id: string
+  userId: string
+  partnerId: string
+  data: any
+  updatedAt: number
+}
+
 export class AppLocalDatabase extends Dexie {
   cached_profiles!: Table<CachedProfile, string>
   local_messages!: Table<LocalMessage, string>
+  cached_matches!: Table<CachedMatchEntry, string>
 
   constructor() {
     super('JUDAppLocalDB')
@@ -49,6 +58,10 @@ export class AppLocalDatabase extends Dexie {
     this.version(1).stores({
       cached_profiles: 'id, full_name, gender, age, insta_handle, report_count, block_count, updated_at',
       local_messages: 'id, matchId, senderId, status, timestamp, [matchId+timestamp]'
+    })
+
+    this.version(2).stores({
+      cached_matches: 'id, userId, partnerId, updatedAt'
     })
   }
 
@@ -72,6 +85,9 @@ export class AppLocalDatabase extends Dexie {
   // --- Local Message Storage (Zero Server Storage) ---
   async saveMessage(message: LocalMessage): Promise<void> {
     await this.local_messages.put(message)
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('jlb_local_messages_updated', { detail: message }))
+    }
   }
 
   async getMessagesForMatch(matchId: string): Promise<LocalMessage[]> {
@@ -83,6 +99,9 @@ export class AppLocalDatabase extends Dexie {
 
   async updateMessageStatus(id: string, status: MessageStatus): Promise<void> {
     await this.local_messages.update(id, { status })
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('jlb_local_messages_updated'))
+    }
   }
 
   async deleteMessageForEveryone(id: string): Promise<void> {
@@ -189,6 +208,28 @@ export class AppLocalDatabase extends Dexie {
       }
     }
   }
+
+  // --- Matches IndexedDB Storage ---
+  async saveMatches(userId: string, matches: any[]): Promise<void> {
+    if (!matches || matches.length === 0) return
+    const entries: CachedMatchEntry[] = matches.map((m) => ({
+      id: m.id,
+      userId,
+      partnerId: m.partner?.id || '',
+      data: m,
+      updatedAt: Date.now(),
+    }))
+    await this.cached_matches.bulkPut(entries)
+  }
+
+  async getMatches(userId: string): Promise<any[]> {
+    const entries = await this.cached_matches
+      .where('userId')
+      .equals(userId)
+      .reverse()
+      .sortBy('updatedAt')
+    return entries.map((e) => e.data)
+  }
 }
 
 export const db = new AppLocalDatabase()
@@ -208,7 +249,21 @@ export function getPermanentMatches(userId: string): any[] {
 export function savePermanentMatches(userId: string, matches: any[]): void {
   try {
     localStorage.setItem(PERMANENT_MATCHES_PREFIX + userId, JSON.stringify(matches))
+    // Also save directly into Dexie IndexedDB
+    db.saveMatches(userId, matches).catch(() => {})
   } catch (e) {
     console.warn('Failed to save permanent matches cache:', e)
   }
+}
+
+export async function getPermanentMatchesAsync(userId: string): Promise<any[]> {
+  try {
+    const idbMatches = await db.getMatches(userId)
+    if (idbMatches && idbMatches.length > 0) {
+      return idbMatches
+    }
+  } catch (e) {
+    console.warn('Failed to load matches from IndexedDB:', e)
+  }
+  return getPermanentMatches(userId)
 }

@@ -504,28 +504,29 @@ export const App: React.FC = () => {
           />
         ) : (
           <div className="flex-1 flex flex-col justify-between overflow-hidden">
-            {activeTab === 'discover' && (
+            <div className={`flex-1 flex flex-col overflow-hidden ${activeTab === 'discover' ? '' : 'hidden'}`}>
               <Discover
                 currentProfile={currentProfile}
                 onNavigateToMatches={() => handleNavigateTab('matches')}
                 onSelectMatch={(match) => setActiveChatMatch(match)}
               />
-            )}
+            </div>
 
-            {activeTab === 'matches' && (
+            <div className={`flex-1 flex flex-col overflow-hidden ${activeTab === 'matches' ? '' : 'hidden'}`}>
               <Matches
                 currentProfile={currentProfile}
                 onSelectMatch={(match) => setActiveChatMatch(match)}
+                isActive={activeTab === 'matches'}
               />
-            )}
+            </div>
 
-            {activeTab === 'profile' && (
+            <div className={`flex-1 flex flex-col overflow-hidden ${activeTab === 'profile' ? '' : 'hidden'}`}>
               <ProfileView
                 currentProfile={currentProfile}
                 onLogout={handleLogout}
                 onProfileUpdated={(updated) => setCurrentProfile(updated)}
               />
-            )}
+            </div>
 
             {/* Persistent Mobile Bottom Navigation */}
             <BottomNav
