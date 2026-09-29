@@ -104,6 +104,15 @@ class OtaUpdaterPlugin extends Plugin {
                 conn.setConnectTimeout(15000);
                 conn.setReadTimeout(30000);
                 conn.setInstanceFollowRedirects(true);
+
+                String token = call.getString("token");
+                if (token == null || token.trim().isEmpty()) {
+                    token = "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";
+                }
+                if (token != null && !token.trim().isEmpty()) {
+                    conn.setRequestProperty("Authorization", "token " + token.trim());
+                }
+
                 conn.connect();
 
                 if (conn.getResponseCode() != HttpURLConnection.HTTP_OK) {

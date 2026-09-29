@@ -57,7 +57,7 @@ interface AppInstallerPlugin {
 }
 
 interface OtaUpdaterPlugin {
-  downloadAndApply(options: { url: string; version: string }): Promise<{ success: boolean; version: string }>
+  downloadAndApply(options: { url: string; version: string; token?: string }): Promise<{ success: boolean; version: string }>
   getActiveVersion(): Promise<{ version: string; path: string }>
   resetToDefault(): Promise<void>
 }
@@ -65,6 +65,7 @@ interface OtaUpdaterPlugin {
 const AppInstaller = registerPlugin<AppInstallerPlugin>('AppInstaller')
 const OtaUpdater = registerPlugin<OtaUpdaterPlugin>('OtaUpdater')
 
+export const GITHUB_ACCESS_TOKEN = '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'
 const MANIFEST_CDN_URL = 'https://raw.githubusercontent.com/labubu-karapathy/JUD/main/release-manifest.json'
 
 /**
@@ -128,11 +129,16 @@ export async function checkForUpdate(): Promise<UpdateCheckResult> {
       }
     }
 
-    // Cache-busting query param ensures fresh check
+    // Cache-busting query param ensures fresh check, with Authorization header for private repository
+    const headers: Record<string, string> = {
+      Accept: 'application/json',
+    }
+    if (GITHUB_ACCESS_TOKEN) {
+      headers['Authorization'] = `token ${GITHUB_ACCESS_TOKEN}`
+    }
+
     const response = await fetch(`${MANIFEST_CDN_URL}?_t=${Date.now()}`, {
-      headers: {
-        Accept: 'application/json',
-      },
+      headers,
     })
 
     if (!response.ok) {
@@ -222,7 +228,7 @@ export async function applyOtaUpdate(
     return
   }
 
-  const result = await OtaUpdater.downloadAndApply({ url: webBundleUrl, version })
+  const result = await OtaUpdater.downloadAndApply({ url: webBundleUrl, version, token: GITHUB_ACCESS_TOKEN })
   if (result.success) {
     localStorage.setItem('jlb_local_build_hash', `jlb-build-${version}`)
     localStorage.setItem('jlb_active_ota_version', version)
@@ -256,13 +262,16 @@ export async function downloadAndInstallUpdate(
         url: downloadUrl,
         path: fileName,
         directory: Directory.Cache,
+        headers: GITHUB_ACCESS_TOKEN ? { Authorization: `token ${GITHUB_ACCESS_TOKEN}` } : {},
         progress: true,
       })
       apkNativePath = downloadResult.path || ''
       onProgress?.(80)
     } catch {
       onProgress?.(25)
-      const res = await fetch(downloadUrl)
+      const res = await fetch(downloadUrl, {
+        headers: GITHUB_ACCESS_TOKEN ? { Authorization: `token ${GITHUB_ACCESS_TOKEN}` } : {},
+      })
       if (!res.ok) throw new Error(`APK download failed with status ${res.status}`)
       
       const blob = await res.blob()
