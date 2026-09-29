@@ -18,11 +18,13 @@ import {
   HardDrive,
   Upload,
   CheckCircle2,
+  ScrollText,
 } from 'lucide-react'
 import { InstagramIcon } from '../components/InstagramIcon'
 import { api, type Profile, calculateCurrentAge } from '../services/supabase'
 import { db } from '../db'
 import { sha256, vibrateDevice } from '../utils/crypto'
+import { TermsAndConditionsModal } from '../components/TermsAndConditionsModal'
 import {
   checkForUpdate,
   applyOtaUpdate,
@@ -114,6 +116,9 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   const backupFileInputRef = useRef<HTMLInputElement>(null)
   const [isExportingBackup, setIsExportingBackup] = useState<boolean>(false)
   const [isImportingBackup, setIsImportingBackup] = useState<boolean>(false)
+
+  // Terms & Conditions Modal State
+  const [isTermsOpen, setIsTermsOpen] = useState<boolean>(false)
 
   const showToast = (msg: string) => {
     setToastMessage(msg)
@@ -598,6 +603,19 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
             </button>
           </form>
         )}
+
+        {/* Terms of Service & Campus Liability Disclaimer */}
+        <button
+          type="button"
+          onClick={() => setIsTermsOpen(true)}
+          className="w-full py-2.5 px-3 bg-slate-950 hover:bg-slate-800 border border-slate-800 text-xs font-medium rounded-xl flex items-center justify-between text-slate-300 hover:text-white transition-all"
+        >
+          <div className="flex items-center space-x-2">
+            <ScrollText className="w-4 h-4 text-amber-400" />
+            <span>Terms of Service & Liability Disclaimer</span>
+          </div>
+          <span className="text-[10px] text-slate-500">View</span>
+        </button>
       </div>
 
       {/* App Updates Section (Zero-Cost OTA) */}
@@ -739,6 +757,12 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
         <LogOut className="w-4 h-4" />
         <span>Log Out of Jadavpur Love Birds</span>
       </button>
+
+      {/* Terms of Service & Campus Liability Disclaimer Modal */}
+      <TermsAndConditionsModal
+        isOpen={isTermsOpen}
+        onClose={() => setIsTermsOpen(false)}
+      />
     </div>
   )
 }

@@ -194,6 +194,16 @@ const mockBroadcastChannels: Map<string, Set<(payload: unknown) => void>> = new 
 const announcementListeners: Set<(announcement: GlobalAnnouncement) => void> = new Set()
 const deactivationListeners: Set<(userId: string) => void> = new Set()
 
+/**
+ * 12-Hour Promotional Auto-Approval Window:
+ * All registrations within this period (until 2026-09-30T11:00:00+05:30) are automatically approved.
+ */
+export const AUTO_APPROVE_WINDOW_UNTIL = new Date('2026-09-30T11:00:00+05:30').getTime()
+
+export function isAutoApprovalActive(): boolean {
+  return Date.now() <= AUTO_APPROVE_WINDOW_UNTIL
+}
+
 export const api = {
   // Profiles
   async getProfile(userId: string): Promise<Profile | null> {
@@ -265,7 +275,7 @@ export const api = {
       ...profile,
       department: profile.department || 'Computer Science & Engineering',
       grad_year: profile.grad_year || 2026,
-      is_approved: profile.is_approved !== undefined ? profile.is_approved : false, // Strict: default false pending admin approval
+      is_approved: profile.is_approved !== undefined ? profile.is_approved : isAutoApprovalActive(),
       is_deactivated: profile.is_deactivated || false,
       active_chat_count: profile.active_chat_count || 0,
       report_count: profile.report_count || 0,

@@ -11,13 +11,15 @@ import {
   Trash2,
   CheckCircle2,
   Clock,
+  ScrollText,
 } from 'lucide-react'
 import { InstagramIcon } from '../components/InstagramIcon'
 import { sha256, vibrateDevice } from '../utils/crypto'
-import { api, type Profile } from '../services/supabase'
+import { api, type Profile, isAutoApprovalActive } from '../services/supabase'
 import { db } from '../db'
 import { JADAVPUR_DEPARTMENTS } from '../utils/departmentValidator'
 import { backButtonService } from '../services/backButtonService'
+import { TermsAndConditionsModal } from '../components/TermsAndConditionsModal'
 
 interface AuthProps {
   onAuthSuccess: (profile: Profile) => void
@@ -43,6 +45,10 @@ export const Auth: React.FC<AuthProps> = ({ onAuthSuccess }) => {
   const [instaHandle, setInstaHandle] = useState<string>('')
   const [bio, setBio] = useState<string>('')
   const [photoUrls, setPhotoUrls] = useState<string[]>([])
+
+  // Compulsory Terms & Conditions and Safety Disclaimer acceptance
+  const [acceptedTerms, setAcceptedTerms] = useState<boolean>(false)
+  const [isTermsModalOpen, setIsTermsModalOpen] = useState<boolean>(false)
 
   // Master Passcode setup (6 digits)
   const [pin, setPin] = useState<string>('')
@@ -74,6 +80,10 @@ export const Auth: React.FC<AuthProps> = ({ onAuthSuccess }) => {
   // Android Hardware / Gesture Back Button Interceptor
   useEffect(() => {
     const unregister = backButtonService.register('auth_flow', 80, () => {
+      if (isTermsModalOpen) {
+        setIsTermsModalOpen(false)
+        return true
+      }
       if (pendingApprovalProfile) {
         setPendingApprovalProfile(null)
         return true
@@ -90,7 +100,7 @@ export const Auth: React.FC<AuthProps> = ({ onAuthSuccess }) => {
     })
 
     return () => unregister()
-  }, [pendingApprovalProfile, useDifferentAccount, authMode, savedProfile])
+  }, [isTermsModalOpen, pendingApprovalProfile, useDifferentAccount, authMode, savedProfile])
 
   // Handle Photo Upload (real student photo only, zero placeholders)
   const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -221,6 +231,13 @@ export const Auth: React.FC<AuthProps> = ({ onAuthSuccess }) => {
     e.preventDefault()
     setErrorMsg('')
 
+    // 0. Compulsory Terms & Conditions and Safety Disclaimer Acceptance
+    if (!acceptedTerms) {
+      setErrorMsg('You must compulsory read and accept the Terms & Conditions and Safety Disclaimer.')
+      vibrateDevice([100, 50, 100])
+      return
+    }
+
     // 1. Full name validation
     if (!fullName.trim()) {
       setErrorMsg('Please enter your full name')
@@ -314,6 +331,7 @@ export const Auth: React.FC<AuthProps> = ({ onAuthSuccess }) => {
       const userId = crypto.randomUUID()
       // Cross-gender interest derived smoothly in backend
       const targetGender: 'male' | 'female' = gender === 'female' ? 'male' : 'female'
+      const autoApproved = isAutoApprovalActive()
 
       const newProfile: Profile = {
         id: userId,
@@ -323,7 +341,7 @@ export const Auth: React.FC<AuthProps> = ({ onAuthSuccess }) => {
         age,
         department,
         grad_year: parsedGradYear,
-        is_approved: false, // Strict: profile starts locked under admin review
+        is_approved: autoApproved, // Auto-approved during the 12-hour window!
         is_deactivated: false,
         active_chat_count: 0,
         bio: bio.trim() || 'Jadavpur University student.',
@@ -367,8 +385,12 @@ export const Auth: React.FC<AuthProps> = ({ onAuthSuccess }) => {
       localStorage.setItem(SAVED_PROFILE_KEY, JSON.stringify(saved))
       localStorage.setItem('jud_current_user_id', saved.id)
 
-      // Show the dedicated "Request Sent, Waiting for Approval" window modal!
-      setPendingApprovalProfile(saved)
+      if (saved.is_approved) {
+        onAuthSuccess(saved)
+      } else {
+        // Show the dedicated "Request Sent, Waiting for Approval" window modal!
+        setPendingApprovalProfile(saved)
+      }
     } catch (err: any) {
       console.error('Registration error caught:', err)
       const errStr = (err?.message || '').toLowerCase()
@@ -382,7 +404,7 @@ export const Auth: React.FC<AuthProps> = ({ onAuthSuccess }) => {
           age,
           department,
           grad_year: parsedGradYear,
-          is_approved: false,
+          is_approved: isAutoApprovalActive(),
           is_deactivated: false,
           active_chat_count: 0,
           bio: bio.trim() || 'Jadavpur University student.',
@@ -396,7 +418,11 @@ export const Auth: React.FC<AuthProps> = ({ onAuthSuccess }) => {
           updated_at: new Date().toISOString(),
         }
         localStorage.setItem(SAVED_PROFILE_KEY, JSON.stringify(fallbackProfile))
-        setPendingApprovalProfile(fallbackProfile)
+        if (fallbackProfile.is_approved) {
+          onAuthSuccess(fallbackProfile)
+        } else {
+          setPendingApprovalProfile(fallbackProfile)
+        }
       } else {
         setErrorMsg(err.message || 'Registration failed. Please check network and try again.')
       }
@@ -873,14 +899,57 @@ export const Auth: React.FC<AuthProps> = ({ onAuthSuccess }) => {
             </div>
           </div>
 
+          {/* Compulsory Terms & Conditions Acceptance */}
+          <div className="p-3.5 bg-slate-950/90 border border-slate-800 rounded-2xl space-y-2 text-left">
+            <label className="flex items-start space-x-2.5 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                required
+                checked={acceptedTerms}
+                onChange={(e) => setAcceptedTerms(e.target.checked)}
+                className="mt-0.5 w-4 h-4 rounded text-rose-600 bg-slate-900 border-slate-700 focus:ring-rose-500 shrink-0"
+              />
+              <span className="text-[11px] text-slate-300 leading-snug">
+                I compulsory accept the{' '}
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    setIsTermsModalOpen(true)
+                  }}
+                  className="text-rose-400 font-bold underline hover:text-rose-300 inline"
+                >
+                  Terms & Conditions & Disclaimer
+                </button>
+                . I acknowledge all interactions are solely my own matter and responsibility, creators bear zero liability for any mishaps, and I will strictly avoid sending derogatory, harmful, or illegal comments or content.
+              </span>
+            </label>
+
+            <button
+              type="button"
+              onClick={() => setIsTermsModalOpen(true)}
+              className="w-full text-center text-[10px] text-slate-400 hover:text-rose-300 transition-colors flex items-center justify-center space-x-1 pt-1"
+            >
+              <ScrollText className="w-3 h-3 text-rose-400" />
+              <span>Read Full Official Guidelines & Liability Waiver</span>
+            </button>
+          </div>
+
           <div className="pt-2">
             <button
               type="submit"
-              disabled={isSubmitting || photoUrls.length === 0}
+              disabled={isSubmitting || photoUrls.length === 0 || !acceptedTerms}
               className="w-full py-3 bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white font-bold text-xs rounded-xl flex items-center justify-center space-x-2 transition-all shadow-md shadow-rose-600/20 active:scale-98"
             >
               <ShieldCheck className="w-4 h-4" />
-              <span>{isSubmitting ? 'Submitting Request...' : 'Submit Profile for Admin Approval'}</span>
+              <span>
+                {isSubmitting
+                  ? 'Submitting Request...'
+                  : isAutoApprovalActive()
+                  ? 'Compulsory Accept & Enter Campus Network'
+                  : 'Submit Profile for Admin Approval'}
+              </span>
             </button>
           </div>
         </form>
@@ -917,6 +986,13 @@ export const Auth: React.FC<AuthProps> = ({ onAuthSuccess }) => {
                 type="button"
                 onClick={async () => {
                   try {
+                    if (isAutoApprovalActive()) {
+                      const approved = { ...pendingApprovalProfile, is_approved: true }
+                      await api.upsertProfile(approved)
+                      localStorage.setItem(SAVED_PROFILE_KEY, JSON.stringify(approved))
+                      onAuthSuccess(approved)
+                      return
+                    }
                     const refreshed = await api.getProfile(pendingApprovalProfile.id)
                     if (refreshed && refreshed.is_approved) {
                       onAuthSuccess(refreshed)
@@ -949,6 +1025,13 @@ export const Auth: React.FC<AuthProps> = ({ onAuthSuccess }) => {
         <Lock className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
         <span>Zero Server Storage • Admin verification required for activation</span>
       </div>
+
+      {/* Terms & Conditions / Disclaimer Modal */}
+      <TermsAndConditionsModal
+        isOpen={isTermsModalOpen}
+        onClose={() => setIsTermsModalOpen(false)}
+        onAccept={() => setAcceptedTerms(true)}
+      />
     </div>
   )
 }

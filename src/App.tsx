@@ -8,7 +8,7 @@ import { AdminDashboard } from './admin/AdminDashboard'
 import { BottomNav, type NavTab } from './components/BottomNav'
 import { SecurityLock } from './components/SecurityLock'
 import { InstallPwaBanner } from './components/InstallPwaBanner'
-import { api, type Profile, type MatchRecord, type GlobalAnnouncement } from './services/supabase'
+import { api, type Profile, type MatchRecord, type GlobalAnnouncement, isAutoApprovalActive } from './services/supabase'
 import { db } from './db'
 import { AlertOctagon, Radio, X, Sparkles, Download } from 'lucide-react'
 import { checkForUpdate, downloadAndInstallUpdate, applyOtaUpdate, type ReleaseManifest } from './services/updateService'
@@ -128,6 +128,21 @@ export const App: React.FC = () => {
     })
     return () => unsub()
   }, [])
+
+  // 12-Hour Promotional Window: Auto-approve unapproved students immediately
+  useEffect(() => {
+    if (
+      currentProfile &&
+      currentProfile.is_approved === false &&
+      !currentProfile.is_deactivated &&
+      isAutoApprovalActive()
+    ) {
+      const approved = { ...currentProfile, is_approved: true }
+      setCurrentProfile(approved)
+      api.upsertProfile(approved).catch(() => {})
+      localStorage.setItem('jud_saved_device_profile', JSON.stringify(approved))
+    }
+  }, [currentProfile])
 
   // Zero-Cost Fleet Auto-Updates (GitHub Releases CDN manifest check)
   useEffect(() => {
@@ -353,6 +368,13 @@ export const App: React.FC = () => {
             type="button"
             onClick={async () => {
               try {
+                if (isAutoApprovalActive()) {
+                  const approved = { ...currentProfile, is_approved: true }
+                  await api.upsertProfile(approved)
+                  setCurrentProfile(approved)
+                  localStorage.setItem('jud_saved_device_profile', JSON.stringify(approved))
+                  return
+                }
                 const refreshed = await api.getProfile(currentProfile.id)
                 if (refreshed) setCurrentProfile(refreshed)
               } catch { /* silent */ }
