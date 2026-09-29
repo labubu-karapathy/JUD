@@ -36,12 +36,27 @@ export const Matches: React.FC<MatchesProps> = ({
   onSelectMatch,
   isActive = true,
 }) => {
-  // 1. Instant 0ms Load: Initialize directly from permanent on-device storage
-  const [matches, setMatches] = useState<MatchWithLastMessage[]>(() =>
-    getPermanentMatches(currentProfile.id)
-  )
+  // 1. Instant 0ms Load: Initialize directly from permanent on-device storage (purging any dummy Campus Match entries)
+  const [matches, setMatches] = useState<MatchWithLastMessage[]>(() => {
+    const local = getPermanentMatches(currentProfile.id)
+    return (local || []).filter(
+      (m: any) => m && m.partner && m.partner.full_name && m.partner.full_name !== 'Campus Match'
+    )
+  })
   const [isManualRefreshing, setIsManualRefreshing] = useState<boolean>(false)
   const [selectedPartner, setSelectedPartner] = useState<Profile | null>(null)
+
+  // Automatically purge any poisoned legacy 'Campus Match' entries from device storage
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem('jud_permanent_matches_' + currentProfile.id)
+      if (raw && raw.includes('Campus Match')) {
+        localStorage.removeItem('jud_permanent_matches_' + currentProfile.id)
+        refreshFromLocalDatabase()
+        syncMatchesWithNetwork(false)
+      }
+    } catch {}
+  }, [currentProfile.id])
 
   // Android Back Button Interceptor for Partner Profile Modal
   useEffect(() => {
@@ -84,8 +99,11 @@ export const Matches: React.FC<MatchesProps> = ({
     if (!cached || cached.length === 0) {
       cached = await getPermanentMatchesAsync(currentProfile.id)
     }
-    if (cached && cached.length > 0) {
-      const enriched = await enrichWithLocalMessages(cached)
+    const clean = (cached || []).filter(
+      (m: any) => m && m.partner && m.partner.full_name && m.partner.full_name !== 'Campus Match'
+    )
+    if (clean.length > 0) {
+      const enriched = await enrichWithLocalMessages(clean)
       setMatches(enriched)
     }
   }, [currentProfile.id, enrichWithLocalMessages])
@@ -98,8 +116,11 @@ export const Matches: React.FC<MatchesProps> = ({
       }
       try {
         const remoteList = await api.fetchMatches(currentProfile.id)
-        if (remoteList && remoteList.length > 0) {
-          const enriched = await enrichWithLocalMessages(remoteList)
+        const clean = (remoteList || []).filter(
+          (m: any) => m && m.partner && m.partner.full_name && m.partner.full_name !== 'Campus Match'
+        )
+        if (clean.length > 0) {
+          const enriched = await enrichWithLocalMessages(clean)
           setMatches(enriched)
           // Save directly to permanent device storage and IndexedDB
           savePermanentMatches(currentProfile.id, enriched)
@@ -170,20 +191,6 @@ export const Matches: React.FC<MatchesProps> = ({
         </button>
       </div>
 
-      {/* Initiation Notice Banner */}
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-3 flex items-start space-x-2.5">
-        <div className="p-1 rounded-lg bg-rose-500/10 text-rose-400 shrink-0 mt-0.5">
-          <Sparkles className="w-4 h-4" />
-        </div>
-        <div className="text-[11px] text-slate-300 leading-relaxed">
-          <strong className="text-white block font-semibold">Female-First Safety Architecture:</strong>
-          {isUserFemale ? (
-            <span>You hold the key to begin conversations. Matches cannot message or connect until you make the first move.</span>
-          ) : (
-            <span>Only female members can dispatch the initial message. Once she says hello, direct chat opens!</span>
-          )}
-        </div>
-      </div>
 
       {/* Matches List */}
       <div className="flex-1 overflow-y-auto space-y-2.5 pr-0.5">
@@ -274,16 +281,11 @@ export const Matches: React.FC<MatchesProps> = ({
                       </p>
                     )}
 
-                    {/* Initiation / Chat status */}
+                    {/* Chat status */}
                     <div className="mt-1 flex items-center space-x-1 text-[11px]">
                       {isDeactivated ? (
                         <span className="text-rose-400 text-[10px] font-semibold">
                           🚫 Chat Disabled
-                        </span>
-                      ) : !canMaleChat ? (
-                        <span className="inline-flex items-center space-x-1 text-amber-400 bg-amber-950/40 px-2 py-0.5 rounded-full border border-amber-800/30 font-medium">
-                          <Lock className="w-3 h-3" />
-                          <span>Waiting for her to initiate</span>
                         </span>
                       ) : match.lastMessage ? (
                         <span className="text-slate-400 truncate">
@@ -297,11 +299,7 @@ export const Matches: React.FC<MatchesProps> = ({
                       ) : (
                         <span className="text-emerald-400 inline-flex items-center space-x-1 font-medium">
                           <CheckCircle2 className="w-3 h-3" />
-                          <span>
-                            {isUserFemale && !isFemaleInitiated
-                              ? 'Tap to make first move'
-                              : 'Connected • Tap to chat'}
-                          </span>
+                          <span>Connected • Tap to chat</span>
                         </span>
                       )}
                     </div>

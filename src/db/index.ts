@@ -240,7 +240,12 @@ const PERMANENT_MATCHES_PREFIX = 'jud_permanent_matches_'
 export function getPermanentMatches(userId: string): any[] {
   try {
     const raw = localStorage.getItem(PERMANENT_MATCHES_PREFIX + userId)
-    return raw ? JSON.parse(raw) : []
+    if (!raw) return []
+    const parsed = JSON.parse(raw)
+    // Filter out and discard any legacy dummy 'Campus Match' entries
+    return Array.isArray(parsed)
+      ? parsed.filter((m) => m && m.partner && m.partner.full_name && m.partner.full_name !== 'Campus Match')
+      : []
   } catch {
     return []
   }
@@ -248,9 +253,13 @@ export function getPermanentMatches(userId: string): any[] {
 
 export function savePermanentMatches(userId: string, matches: any[]): void {
   try {
-    localStorage.setItem(PERMANENT_MATCHES_PREFIX + userId, JSON.stringify(matches))
+    // Only save real, verified partner profiles - never dummy 'Campus Match' entries
+    const cleanMatches = (matches || []).filter(
+      (m) => m && m.partner && m.partner.full_name && m.partner.full_name !== 'Campus Match'
+    )
+    localStorage.setItem(PERMANENT_MATCHES_PREFIX + userId, JSON.stringify(cleanMatches))
     // Also save directly into Dexie IndexedDB
-    db.saveMatches(userId, matches).catch(() => {})
+    db.saveMatches(userId, cleanMatches).catch(() => {})
   } catch (e) {
     console.warn('Failed to save permanent matches cache:', e)
   }
@@ -260,7 +269,10 @@ export async function getPermanentMatchesAsync(userId: string): Promise<any[]> {
   try {
     const idbMatches = await db.getMatches(userId)
     if (idbMatches && idbMatches.length > 0) {
-      return idbMatches
+      const clean = idbMatches.filter(
+        (m) => m && m.partner && m.partner.full_name && m.partner.full_name !== 'Campus Match'
+      )
+      if (clean.length > 0) return clean
     }
   } catch (e) {
     console.warn('Failed to load matches from IndexedDB:', e)
@@ -271,7 +283,7 @@ export async function getPermanentMatchesAsync(userId: string): Promise<any[]> {
     return local
   }
 
-  // Deep offline fallback: Reconstruct active conversations from local_messages & cached_profiles
+  // Deep offline fallback: Reconstruct active conversations from local_messages & verified cached_profiles
   try {
     const allMsgs = await db.local_messages.toArray()
     if (allMsgs.length > 0) {
@@ -291,32 +303,19 @@ export async function getPermanentMatchesAsync(userId: string): Promise<any[]> {
 
       const reconstructed: any[] = []
       for (const [matchId, meta] of matchMap.entries()) {
-        let partner: any = null
-        if (meta.partnerId) {
-          partner = await db.cached_profiles.get(meta.partnerId)
+        if (!meta.partnerId) continue
+        const partner = await db.cached_profiles.get(meta.partnerId)
+        // ONLY accept real profiles with non-dummy names
+        if (partner && partner.full_name && partner.full_name !== 'Campus Match') {
+          reconstructed.push({
+            id: matchId,
+            female_id: partner.gender === 'female' ? partner.id : userId,
+            male_id: partner.gender === 'male' ? partner.id : userId,
+            has_female_initiated: true,
+            media_allowed: true,
+            partner,
+          })
         }
-        if (!partner) {
-          partner = {
-            id: meta.partnerId || 'partner_' + matchId,
-            full_name: 'Campus Match',
-            gender: 'female',
-            age: 20,
-            bio: '',
-            insta_handle: '@jadavpurian',
-            photo_urls: [],
-            report_count: 0,
-            block_count: 0,
-            is_verified: true,
-          }
-        }
-        reconstructed.push({
-          id: matchId,
-          female_id: partner.gender === 'female' ? partner.id : userId,
-          male_id: partner.gender === 'male' ? partner.id : userId,
-          has_female_initiated: true,
-          media_allowed: true,
-          partner,
-        })
       }
 
       if (reconstructed.length > 0) {

@@ -398,21 +398,36 @@ export const api = {
           .or(`female_id.eq.${currentUserId},male_id.eq.${currentUserId}`)
 
         if (error) throw error
-        const result: MatchRecord[] = (data || []).map((row: any) => {
-          const partner = row.female_id === currentUserId ? row.male : row.female
-          if (partner && partner.id) {
+        const result: MatchRecord[] = []
+        for (const row of (data || [])) {
+          let partner = row.female_id === currentUserId ? row.male : row.female
+          const partnerId = row.female_id === currentUserId ? row.male_id : row.female_id
+
+          // Fallback: If join didn't populate partner, fetch profile directly
+          if (!partner && partnerId) {
+            try {
+              const { data: pData } = await supabase
+                .from('profiles')
+                .select('*')
+                .eq('id', partnerId)
+                .maybeSingle()
+              if (pData) partner = pData
+            } catch {}
+          }
+
+          if (partner && partner.id && partner.full_name && partner.full_name !== 'Campus Match') {
             db.cached_profiles.put(partner).catch(() => {})
+            result.push({
+              id: row.id,
+              female_id: row.female_id,
+              male_id: row.male_id,
+              has_female_initiated: true,
+              media_allowed: true,
+              matched_at: row.matched_at,
+              partner,
+            })
           }
-          return {
-            id: row.id,
-            female_id: row.female_id,
-            male_id: row.male_id,
-            has_female_initiated: row.has_female_initiated,
-            media_allowed: row.media_allowed,
-            matched_at: row.matched_at,
-            partner,
-          }
-        })
+        }
 
         if (result.length > 0) {
           savePermanentMatches(currentUserId, result)
@@ -421,7 +436,9 @@ export const api = {
       } catch (networkErr) {
         console.warn('fetchMatches network error, loading from local offline storage:', networkErr)
         const offlineMatches = await getPermanentMatchesAsync(currentUserId)
-        return offlineMatches
+        return (offlineMatches || []).filter(
+          (m: any) => m && m.partner && m.partner.full_name && m.partner.full_name !== 'Campus Match'
+        )
       }
     }
 

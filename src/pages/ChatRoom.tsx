@@ -805,16 +805,6 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
           <span>Zero Server Storage • Offline Caching • Direct P2P</span>
         </div>
 
-        {/* Female-First Gate Warning for Males */}
-        {!isUserFemale && !matchState.has_female_initiated && !isPartnerDeactivated && (
-          <div className="p-4 rounded-2xl bg-amber-950/40 border border-amber-800/50 text-center space-y-2">
-            <Sparkles className="w-6 h-6 text-amber-400 mx-auto" />
-            <h4 className="font-bold text-xs text-amber-300">Awaiting Female First Move</h4>
-            <p className="text-[11px] text-slate-300">
-              In accordance with campus safety rules, signaling will only unlock after she sends the first message.
-            </p>
-          </div>
-        )}
 
         {/* Message Bubbles */}
         {messages.map((msg) => {
@@ -955,33 +945,18 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
               type="button"
               onClick={() => {
                 if (isSendingMedia) return
-                if (!isUserFemale && !matchState.media_allowed) {
-                  setMediaTooltip('Only she can enable media sharing')
-                  setTimeout(() => setMediaTooltip(''), 3000)
-                  return
-                }
                 fileInputRef.current?.click()
               }}
-              disabled={isSendingMedia || (!isUserFemale && !matchState.media_allowed)}
-              title={
-                isSendingMedia
-                  ? 'Transmitting media over P2P...'
-                  : !isUserFemale && !matchState.media_allowed
-                  ? 'Only she can enable media sharing'
-                  : 'Attach image'
-              }
+              disabled={isSendingMedia || isPartnerDeactivated}
+              title={isSendingMedia ? 'Transmitting media over P2P...' : 'Attach image'}
               className={`p-2 rounded-full border transition-all ${
                 isSendingMedia
                   ? 'bg-rose-950/80 text-rose-300 border-rose-500/80 animate-pulse cursor-wait'
-                  : !isUserFemale && !matchState.media_allowed
-                  ? 'bg-slate-950 text-slate-600 border-slate-800 cursor-not-allowed'
                   : 'bg-slate-800 text-slate-300 hover:text-white border-slate-700 hover:bg-slate-700'
               }`}
             >
               {isSendingMedia ? (
                 <div className="w-4 h-4 border-2 border-rose-400 border-t-transparent rounded-full animate-spin" />
-              ) : !isUserFemale && !matchState.media_allowed ? (
-                <Lock className="w-4 h-4 text-slate-500" />
               ) : (
                 <Paperclip className="w-4 h-4" />
               )}
@@ -1021,12 +996,8 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
               onChange={handleInputChange}
               onKeyDown={handleKeyDown}
               enterKeyHint="enter"
-              placeholder={
-                !isUserFemale && !matchState.has_female_initiated
-                  ? 'Waiting for her to initiate...'
-                  : 'Type a message...'
-              }
-              disabled={!isUserFemale && !matchState.has_female_initiated}
+              placeholder="Type a message..."
+              disabled={isPartnerDeactivated}
               className="w-full bg-slate-950 border border-slate-800 rounded-2xl px-3.5 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-rose-500 disabled:opacity-50 resize-none overflow-y-auto block leading-relaxed"
               style={{
                 fontSize: '15px',
@@ -1040,10 +1011,7 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
           <button
             type="button"
             onClick={() => handleSendMessage()}
-            disabled={
-              !inputText.trim() ||
-              (!isUserFemale && !matchState.has_female_initiated)
-            }
+            disabled={!inputText.trim() || isPartnerDeactivated}
             aria-label="Send message"
             className="p-2.5 rounded-full bg-rose-600 hover:bg-rose-500 disabled:opacity-40 text-white transition-all shadow-md shadow-rose-600/30 active:scale-95 mb-0.5 shrink-0 flex items-center justify-center cursor-pointer"
           >

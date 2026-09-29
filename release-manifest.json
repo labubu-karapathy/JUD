@@ -1,12 +1,12 @@
 {
-  "version": "2.5.3",
-  "versionCode": 20407,
-  "releaseDate": "2026-09-30T00:35:00.000Z",
+  "version": "2.5.4",
+  "versionCode": 20408,
+  "releaseDate": "2026-09-30T02:00:00.000Z",
   "mandatory": false,
   "downloadUrl": "https://raw.githubusercontent.com/labubu-karapathy/JUD/main/JadavpurLoveBirds.apk",
   "webBundleUrl": "https://raw.githubusercontent.com/labubu-karapathy/JUD/main/web-dist.zip",
   "minNativeVersionCode": 20404,
-  "build_hash": "jlb-build-2026-09-30-v2.5.3",
-  "commit_message": "v2.5.3: WhatsApp-style 100% offline chat visibility, local conversation reconstruction, and offline profile session preservation",
+  "build_hash": "jlb-build-2026-09-30-v2.5.4",
+  "commit_message": "v2.5.4: Purge placeholder Campus Match, direct partner profile resolution, remove female-first restriction banners and unlock universal chat",
   "apk_url": "https://raw.githubusercontent.com/labubu-karapathy/JUD/main/JadavpurLoveBirds.apk"
 }
